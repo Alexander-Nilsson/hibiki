@@ -94,10 +94,6 @@ impl RoutingEngine {
             return RoutingResult::Ignored;
         }
 
-        if self.focus_state == FocusState::Unfocused {
-            return RoutingResult::Ignored;
-        }
-
         RoutingResult::Dispatch(key, pressed)
     }
 

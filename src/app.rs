@@ -114,7 +114,6 @@ fn activate(
     let state = Rc::new(RefCell::new(RuntimeState::default()));
     state.borrow_mut().feedback_service = Some(FeedbackService::new(app));
     
-    // Initialize RoutingEngine config
     let config = config_service.get_config();
     {
         let mut s = state.borrow_mut();

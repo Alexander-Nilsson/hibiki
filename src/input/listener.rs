@@ -42,13 +42,15 @@ impl Default for ListenerConfig {
 
 pub struct ListenerHandle {
     running: Arc<AtomicBool>,
-    control_tx: Sender<InputControlCommand>,
+    control_txs: Vec<Sender<InputControlCommand>>,
 }
 
 impl ListenerHandle {
     pub fn send_command(&self, cmd: InputControlCommand) {
-        if let Err(e) = self.control_tx.try_send(cmd) {
-            warn!("Failed to send input control command: {}", e);
+        for tx in &self.control_txs {
+            if let Err(e) = tx.try_send(cmd) {
+                warn!("Failed to send input control command: {}", e);
+            }
         }
     }
 }
@@ -66,6 +68,7 @@ pub struct KeyListener {
 }
 
 impl KeyListener {
+    #[must_use]
     pub fn new(sender: Sender<KeyEvent>, config: ListenerConfig) -> Self {
         Self {
             sender,
@@ -88,13 +91,17 @@ impl KeyListener {
         };
 
         self.running.store(true, Ordering::SeqCst);
-        let (control_tx, control_rx) = async_channel::unbounded::<InputControlCommand>();
+
+        let mut control_txs = Vec::new();
 
         for keyboard in devices_to_use {
             let sender = self.sender.clone();
             let running = Arc::clone(&self.running);
             let ignored_keys = self.config.ignored_keys.clone();
-            let control_rx = control_rx.clone();
+
+            // Create a dedicated channel for each keyboard thread
+            let (control_tx, control_rx) = async_channel::unbounded::<InputControlCommand>();
+            control_txs.push(control_tx);
 
             thread::spawn(move || {
                 if let Err(e) =
@@ -107,7 +114,7 @@ impl KeyListener {
 
         Ok(ListenerHandle {
             running: self.running.clone(),
-            control_tx,
+            control_txs,
         })
     }
 
@@ -133,10 +140,21 @@ fn listen_to_device(
     info!("Listening to keyboard: {}", keyboard.name);
 
     let raw_fd = device.as_raw_fd();
+    let mut pressed_keys = HashSet::new();
+
+    if let Ok(key_state) = device.get_key_state() {
+        for key in key_state.iter() {
+            if crate::input::keymap::is_modifier(key) {
+                info!("Detected held modifier on startup: {:?}", key);
+                pressed_keys.insert(key);
+                let _ = sender.try_send(KeyEvent::Pressed(KeyDisplay::new(key, false)));
+            }
+        }
+    }
 
     let borrowed_fd = unsafe { BorrowedFd::borrow_raw(raw_fd) };
     let mut poll_fds = [PollFd::new(borrowed_fd, PollFlags::POLLIN)];
-    let mut pressed_keys = HashSet::new();
+    // let mut pressed_keys = HashSet::new(); // Already declared
     let mut is_grabbed = false;
     let mut pending_grab = false;
 
@@ -295,6 +313,7 @@ fn process_events(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_channel::bounded;
 
     #[test]
     fn test_listener_config_default() {
@@ -309,7 +328,7 @@ mod tests {
         let (control_tx, _) = bounded(1);
         let handle = ListenerHandle {
             running: running.clone(),
-            control_tx,
+            control_txs: vec![control_tx],
         };
 
         assert!(running.load(Ordering::SeqCst));
