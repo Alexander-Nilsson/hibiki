@@ -154,8 +154,8 @@ fn listen_to_device(
 
     let borrowed_fd = unsafe { BorrowedFd::borrow_raw(raw_fd) };
     let mut poll_fds = [PollFd::new(borrowed_fd, PollFlags::POLLIN)];
-    // let mut pressed_keys = HashSet::new(); // Already declared
     let mut is_grabbed = false;
+
     let mut pending_grab = false;
 
     while running.load(Ordering::SeqCst) {
