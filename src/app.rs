@@ -1,6 +1,7 @@
 use crate::application::config_service::ConfigService;
 use crate::application::feedback_service::FeedbackService;
 use crate::application::routing::{RoutingEngine, RoutingResult};
+use crate::application::typography_service::TypographyService;
 use crate::compositor::LayoutEvent;
 use crate::domain::CaptureState;
 use crate::input::{
@@ -15,7 +16,7 @@ use anyhow::Result;
 use async_channel::{bounded, Receiver};
 use gtk4::glib::{self, ControlFlow};
 use gtk4::prelude::*;
-use gtk4::{Application, ApplicationWindow};
+use gtk4::{Application, ApplicationWindow, CssProvider};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -41,6 +42,7 @@ struct RuntimeState {
     layout_manager: Option<LayoutManager>,
     feedback_service: Option<FeedbackService>,
     drag_controllers: Vec<gtk4::EventController>,
+    css_provider: Option<CssProvider>,
 }
 
 impl App {
@@ -58,7 +60,7 @@ impl App {
         let config_service = self.config_service.clone();
 
         self.gtk_app.connect_activate(move |app| {
-            activate(app, config_service.clone(), tray_rx.clone(), tray_handle.clone());
+            activate(app, &config_service, tray_rx.clone(), tray_handle.clone());
         });
 
         let exit_code = self.gtk_app.run_with_args::<&str>(&[]);
@@ -71,7 +73,7 @@ impl App {
         let config_service = self.config_service.clone();
 
         self.gtk_app.connect_activate(move |app| {
-            activate_without_tray(app, config_service.clone());
+            activate_without_tray(app, &config_service);
         });
 
         let exit_code = self.gtk_app.run_with_args::<&str>(&[]);
@@ -81,7 +83,7 @@ impl App {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn activate_without_tray(app: &Application, config_service: ConfigService) {
+fn activate_without_tray(app: &Application, config_service: &ConfigService) {
     info!("Activating keystroke application (no tray)");
 
     let state = Rc::new(RefCell::new(RuntimeState::default()));
@@ -92,20 +94,23 @@ fn activate_without_tray(app: &Application, config_service: ConfigService) {
         let mut s = state.borrow_mut();
         s.routing_engine.update_config(
             &config.keystroke_hotkey, 
-            &config.bubble_hotkey,
+            &config.bubble.hotkey,
             &config.pause_hotkey,
             &config.toggle_focus_hotkey
         );
     }
 
-    load_css_defaults();
+    let css_provider = load_css_defaults();
+    
+    crate::ui::update_css_provider(&css_provider, &config);
+    state.borrow_mut().css_provider = Some(css_provider);
 
-    setup_launcher_and_modes(app, &state, config_service);
+    setup_launcher_and_modes(app, &state, config_service.clone());
 }
 
 fn activate(
     app: &Application,
-    config_service: ConfigService,
+    config_service: &ConfigService,
     tray_rx: Receiver<TrayAction>,
     tray_handle: TrayHandle,
 ) {
@@ -119,19 +124,22 @@ fn activate(
         let mut s = state.borrow_mut();
         s.routing_engine.update_config(
             &config.keystroke_hotkey, 
-            &config.bubble_hotkey,
+            &config.bubble.hotkey,
             &config.pause_hotkey,
             &config.toggle_focus_hotkey
         );
     }
 
-    load_css_defaults();
+    let css_provider = load_css_defaults();
+    
+    crate::ui::update_css_provider(&css_provider, &config);
+    state.borrow_mut().css_provider = Some(css_provider);
 
     setup_launcher_and_modes(app, &state, config_service.clone());
 
     setup_tray_handling(
         Rc::clone(&state),
-        config_service,
+        config_service.clone(),
         app.clone(),
         tray_rx,
         tray_handle,
@@ -181,12 +189,12 @@ fn switch_mode(
 
     match mode {
         DisplayMode::Keystroke => {
-            if let Err(e) = start_keystroke_mode(app, config_service, Rc::clone(state)) {
+            if let Err(e) = start_keystroke_mode(app, config_service, state) {
                 error!("Failed to start keystroke mode: {}", e);
             }
         }
         DisplayMode::Bubble => {
-            if let Err(e) = start_bubble_mode(app, config_service, Rc::clone(state)) {
+            if let Err(e) = start_bubble_mode(app, config_service, state) {
                 error!("Failed to start bubble mode: {}", e);
             }
         }
@@ -307,7 +315,8 @@ fn open_settings(
         return;
     }
 
-    let settings_window = create_settings_window(app, config_service);
+    let typography_service = TypographyService::new();
+    let settings_window = create_settings_window(app, config_service, typography_service);
 
     state.borrow_mut().settings_window = Some(settings_window.clone());
 
@@ -324,7 +333,7 @@ fn open_settings(
 fn start_keystroke_mode(
     app: &Application,
     config_service: &ConfigService,
-    state: Rc<RefCell<RuntimeState>>,
+    state: &Rc<RefCell<RuntimeState>>,
 ) -> Result<()> {
     info!("Starting keystroke mode");
 
@@ -368,7 +377,7 @@ fn start_keystroke_mode(
     }
 
     let active_key_loop = Arc::clone(&mode_active);
-    let state_clone = Rc::clone(&state);
+    let state_clone = Rc::clone(state);
     let display_clone = Rc::clone(&display);
     
     let app_clone = app.clone();
@@ -437,7 +446,7 @@ fn start_keystroke_mode(
             
             state_c.borrow_mut().routing_engine.update_config(
                 &cfg.keystroke_hotkey, 
-                &cfg.bubble_hotkey,
+                &cfg.bubble.hotkey,
                 &cfg.pause_hotkey,
                 &cfg.toggle_focus_hotkey
             );
@@ -446,6 +455,10 @@ fn start_keystroke_mode(
                 let mut disp = display_c.borrow_mut();
                 disp.set_display_timeout(cfg.display_timeout_ms);
                 disp.set_max_keys(cfg.max_keys);
+            }
+
+            if let Some(provider) = &state_c.borrow().css_provider {
+                crate::ui::update_css_provider(provider, &cfg);
             }
 
             {
@@ -474,7 +487,7 @@ fn start_keystroke_mode(
     });
 
     let active = Arc::clone(&mode_active);
-    let state_clone = Rc::clone(&state);
+    let state_clone = Rc::clone(state);
     setup_keystroke_cleanup_timer(display.clone(), window.clone(), state_clone, active);
 
     window.present();
@@ -486,7 +499,7 @@ fn start_keystroke_mode(
 fn start_bubble_mode(
     app: &Application,
     config_service: &ConfigService,
-    state: Rc<RefCell<RuntimeState>>,
+    state: &Rc<RefCell<RuntimeState>>,
 ) -> Result<()> {
     info!("Starting bubble mode");
 
@@ -499,12 +512,12 @@ fn start_bubble_mode(
 
     let window = create_bubble_window(app, &config)?;
 
-    if config.bubble_draggable {
+    if config.bubble.draggable {
         let controllers = setup_drag(&window);
         state.borrow_mut().drag_controllers = controllers;
     }
 
-    let mut display_widget = BubbleDisplayWidget::new(config.bubble_timeout_ms);
+    let mut display_widget = BubbleDisplayWidget::new(config.bubble.timeout_ms);
     
      let mut layout_manager = if config.auto_detect_layout {
         let lm = LayoutManager::new();
@@ -571,7 +584,7 @@ fn start_bubble_mode(
     }
 
     let active = Arc::clone(&mode_active);
-    let state_clone = Rc::clone(&state);
+    let state_clone = Rc::clone(state);
     let display_clone = Rc::clone(&display);
     
     let app_clone = app.clone();
@@ -644,7 +657,7 @@ fn start_bubble_mode(
     });
     
     let active = Arc::clone(&mode_active);
-    let state_clone = Rc::clone(&state);
+    let state_clone = Rc::clone(state);
     let display_clone = Rc::clone(&display);
 
     glib::MainContext::default().spawn_local(async move {
@@ -668,7 +681,7 @@ fn start_bubble_mode(
     });
 
     let _active = Arc::clone(&mode_active);
-    let _state_clone = Rc::clone(&state);
+    let _state_clone = Rc::clone(state);
     let _display_clone = Rc::clone(&display);
 
     let mut rx = config_service.subscribe();
@@ -686,22 +699,27 @@ fn start_bubble_mode(
             
             state_c.borrow_mut().routing_engine.update_config(
                 &cfg.keystroke_hotkey, 
-                &cfg.bubble_hotkey,
+                &cfg.bubble.hotkey,
                 &cfg.pause_hotkey,
                 &cfg.toggle_focus_hotkey
             );
 
             {
                 let mut disp = display_c.borrow_mut();
-                disp.set_display_duration(cfg.bubble_timeout_ms);
+                disp.set_display_duration(cfg.bubble.timeout_ms);
+            }
+
+            // Update CSS provider if available
+            if let Some(provider) = &state_c.borrow().css_provider {
+                crate::ui::update_css_provider(provider, &cfg);
             }
 
             {
                 let mut s = state_c.borrow_mut();
                 let current_draggable = !s.drag_controllers.is_empty();
                 
-                if cfg.bubble_draggable != current_draggable {
-                    if cfg.bubble_draggable {
+                if cfg.bubble.draggable != current_draggable {
+                    if cfg.bubble.draggable {
                          let controllers = setup_drag(&window_c);
                          s.drag_controllers = controllers;
                     } else {
@@ -710,19 +728,19 @@ fn start_bubble_mode(
                          }
                          s.drag_controllers.clear();
                          
-                         crate::ui::window::update_position(&window_c, cfg.bubble_position, cfg.margin);
+                         crate::ui::window::update_position(&window_c, cfg.bubble.position, cfg.margin);
                     }
                 }
             }
             
-            if !cfg.bubble_draggable {
-                crate::ui::window::update_position(&window_c, cfg.bubble_position, cfg.margin);
+            if !cfg.bubble.draggable {
+                crate::ui::window::update_position(&window_c, cfg.bubble.position, cfg.margin);
             }
         }
     });
 
     let active = Arc::clone(&mode_active);
-    let state_clone = Rc::clone(&state);
+    let state_clone = Rc::clone(state);
     setup_bubble_cleanup_timer(display.clone(), window.clone(), state_clone, active);
 
     window.present();
@@ -802,7 +820,7 @@ fn setup_bubble_cleanup_timer(
     });
 }
 
-fn load_css_defaults() {
+fn load_css_defaults() -> CssProvider {
     let provider = gtk4::CssProvider::new();
     let defaults = include_str!("../style/defaults.css");
     let settings = include_str!("../style/settings.css");
@@ -818,4 +836,6 @@ fn load_css_defaults() {
             gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
     }
+    
+    provider
 }

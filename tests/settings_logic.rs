@@ -26,18 +26,18 @@ async fn test_config_service_updates() {
 
     // 2. Update Bubble Config
     let mut cfg = service.get_config();
-    cfg.bubble_timeout_ms = 5000;
-    cfg.bubble_position = Position::BottomRight;
+    cfg.bubble.timeout_ms = 5000;
+    cfg.bubble.position = Position::BottomRight;
     service.update_config(cfg.clone()).unwrap();
 
     // Verify broadcast
     rx.changed().await.unwrap();
     let current = rx.borrow().clone();
-    assert_eq!(current.bubble_timeout_ms, 5000);
-    assert_eq!(current.bubble_position, Position::BottomRight);
+    assert_eq!(current.bubble.timeout_ms, 5000);
+    assert_eq!(current.bubble.position, Position::BottomRight);
     
     // 3. Verify persistence
     let content = fs::read_to_string(&config_path).unwrap();
     let persisted: KeystrokeConfig = serde_json::from_str(&content).unwrap();
-    assert_eq!(persisted.bubble_timeout_ms, 5000);
+    assert_eq!(persisted.bubble.timeout_ms, 5000);
 }

@@ -1,4 +1,5 @@
 use crate::application::config_service::ConfigService;
+use crate::application::typography_service::TypographyService;
 use crate::domain::config::Position;
 use gtk4::prelude::*;
 use gtk4::{
@@ -24,6 +25,7 @@ const POSITION_OPTIONS: [(&str, Position); 9] = [
 pub fn create_settings_window(
     app: &Application,
     config_service: ConfigService,
+    typography_service: TypographyService,
 ) -> ApplicationWindow {
     let window = ApplicationWindow::builder()
         .application(app)
@@ -51,7 +53,7 @@ pub fn create_settings_window(
         .hscrollbar_policy(gtk4::PolicyType::Never)
         .vexpand(true)
         .build();
-    let keystroke_content = create_keystroke_settings(&config_service, &window);
+    let keystroke_content = create_keystroke_settings(&config_service, &typography_service, &window);
     keystroke_scroll.set_child(Some(&keystroke_content));
     stack.add_titled(&keystroke_scroll, Some("keystroke"), "Keystrokes");
 
@@ -59,7 +61,7 @@ pub fn create_settings_window(
         .hscrollbar_policy(gtk4::PolicyType::Never)
         .vexpand(true)
         .build();
-    let bubble_content = create_bubble_settings(&config_service, &window);
+    let bubble_content = create_bubble_settings(&config_service, &typography_service, &window);
     bubble_scroll.set_child(Some(&bubble_content));
     stack.add_titled(&bubble_scroll, Some("bubble"), "Bubbles");
 
@@ -69,7 +71,77 @@ pub fn create_settings_window(
     window
 }
 
-fn create_keystroke_settings(config_service: &ConfigService, window: &ApplicationWindow) -> GtkBox {
+fn create_font_control(
+    title: &str,
+    current_font: String,
+    current_size: f64,
+    typography_service: &TypographyService,
+    on_change: impl Fn(Option<String>, Option<f64>) + 'static + Clone,
+) -> Vec<ListBoxRow> {
+    let mut rows = Vec::new();
+
+    let family_row = create_action_row(title, Some("Font Family"));
+    let dropdown = DropDown::builder()
+        .enable_search(true)
+        .valign(Align::Center)
+        .width_request(200)
+        .build();
+
+    let current_font_c = current_font.clone();
+    let dropdown_c = dropdown.clone();
+    let on_change_c = on_change.clone();
+    let service_c = typography_service.clone();
+
+    glib::MainContext::default().spawn_local(async move {
+        match service_c.get_system_fonts().await {
+            Ok(fonts) => {
+                let font_names: Vec<&str> = fonts.iter().map(|s| s.as_str()).collect();
+                let model = StringList::new(&font_names);
+                dropdown_c.set_model(Some(&model));
+
+                if let Some(idx) = fonts.iter().position(|f| *f == current_font_c) {
+                    dropdown_c.set_selected(idx as u32);
+                }
+            }
+            Err(e) => eprintln!("Failed to load fonts: {}", e),
+        }
+    });
+
+    dropdown.connect_selected_item_notify(move |dd| {
+        if let Some(item) = dd.selected_item() {
+            if let Some(s) = item.downcast_ref::<gtk4::StringObject>() {
+                on_change_c(Some(s.string().to_string()), None);
+            }
+        }
+    });
+
+    family_row.add_suffix(&dropdown);
+    rows.push(family_row.row);
+
+    let size_row = create_action_row("Font Size", None);
+    let adj = Adjustment::new(current_size, 0.5, 50.0, 0.1, 1.0, 0.0);
+    let spin = SpinButton::builder()
+        .adjustment(&adj)
+        .digits(1)
+        .valign(Align::Center)
+        .build();
+
+    let on_change_c = on_change.clone();
+    adj.connect_value_changed(move |a| {
+        on_change_c(None, Some(a.value()));
+    });
+
+    size_row.add_suffix(&spin);
+    rows.push(size_row.row);
+
+    rows
+}
+
+fn create_keystroke_settings(
+    config_service: &ConfigService,
+    typography_service: &TypographyService,
+    window: &ApplicationWindow,
+) -> GtkBox {
     let content_box = GtkBox::new(Orientation::Vertical, 0);
     content_box.set_margin_top(12);
     content_box.set_margin_bottom(24);
@@ -122,6 +194,36 @@ fn create_keystroke_settings(config_service: &ConfigService, window: &Applicatio
 
     position_row.add_suffix(&position_dropdown);
     appearance_list.append(&position_row.row);
+
+    let service_c = config_service.clone();
+    let font_rows = create_font_control(
+        "Keystroke Font",
+        config.font_family.clone(),
+        config.font_size,
+        typography_service,
+        move |family, size| {
+            let mut cfg = service_c.get_config();
+            let mut changed = false;
+            if let Some(f) = family {
+                if cfg.font_family != f {
+                    cfg.font_family = f;
+                    changed = true;
+                }
+            }
+            if let Some(s) = size {
+                if (cfg.font_size - s).abs() > f64::EPSILON {
+                    cfg.font_size = s;
+                    changed = true;
+                }
+            }
+            if changed {
+                let _ = service_c.update_config(cfg);
+            }
+        },
+    );
+    for row in font_rows {
+        appearance_list.append(&row);
+    }
 
     let behavior_list = create_preferences_group("Behavior", &content_box);
 
@@ -270,7 +372,11 @@ fn create_keystroke_settings(config_service: &ConfigService, window: &Applicatio
     content_box
 }
 
-fn create_bubble_settings(config_service: &ConfigService, window: &ApplicationWindow) -> GtkBox {
+fn create_bubble_settings(
+    config_service: &ConfigService,
+    typography_service: &TypographyService,
+    window: &ApplicationWindow,
+) -> GtkBox {
     let content_box = GtkBox::new(Orientation::Vertical, 0);
     content_box.set_margin_top(12);
     content_box.set_margin_bottom(24);
@@ -293,13 +399,43 @@ fn create_bubble_settings(config_service: &ConfigService, window: &ApplicationWi
 
     if let Some(idx) = POSITION_OPTIONS
         .iter()
-        .position(|(_, p)| *p == config.bubble_position)
+        .position(|(_, p)| *p == config.bubble.position)
     {
         position_dropdown.set_selected(idx as u32);
     }
 
     position_row.add_suffix(&position_dropdown);
     appearance_list.append(&position_row.row);
+
+    let service_c = config_service.clone();
+    let font_rows = create_font_control(
+        "Bubble Font",
+        config.bubble.font_family.clone(),
+        config.bubble.font_size,
+        typography_service,
+        move |family, size| {
+            let mut cfg = service_c.get_config();
+            let mut changed = false;
+            if let Some(f) = family {
+                if cfg.bubble.font_family != f {
+                    cfg.bubble.font_family = f;
+                    changed = true;
+                }
+            }
+            if let Some(s) = size {
+                if (cfg.bubble.font_size - s).abs() > f64::EPSILON {
+                    cfg.bubble.font_size = s;
+                    changed = true;
+                }
+            }
+            if changed {
+                let _ = service_c.update_config(cfg);
+            }
+        },
+    );
+    for row in font_rows {
+        appearance_list.append(&row);
+    }
 
     let behavior_list = create_preferences_group("Behavior", &content_box);
 
@@ -308,7 +444,7 @@ fn create_bubble_settings(config_service: &ConfigService, window: &ApplicationWi
         Some("How long bubbles stay visible (seconds)"),
     );
     let duration_adj = Adjustment::new(
-        config.bubble_timeout_ms as f64 / 1000.0,
+        config.bubble.timeout_ms as f64 / 1000.0,
         1.0,
         20.0,
         1.0,
@@ -329,7 +465,7 @@ fn create_bubble_settings(config_service: &ConfigService, window: &ApplicationWi
 
     let draggable_row = create_action_row("Draggable", Some("Move with mouse"));
     let draggable_switch = Switch::builder()
-        .active(config.bubble_draggable)
+        .active(config.bubble.draggable)
         .valign(Align::Center)
         .build();
     draggable_row.add_suffix(&draggable_switch);
@@ -337,7 +473,7 @@ fn create_bubble_settings(config_service: &ConfigService, window: &ApplicationWi
 
     let hotkey_row = create_action_row("Activation Hotkey", Some("Switch to Bubbles"));
     let hotkey_btn = Button::builder()
-        .label(&config.bubble_hotkey)
+        .label(&config.bubble.hotkey)
         .valign(Align::Center)
         .build();
 
@@ -374,8 +510,8 @@ fn create_bubble_settings(config_service: &ConfigService, window: &ApplicationWi
             .map(|(_, p)| *p)
             .unwrap_or(Position::TopRight);
         let mut cfg = service_c.get_config();
-        if cfg.bubble_position != pos {
-            cfg.bubble_position = pos;
+        if cfg.bubble.position != pos {
+            cfg.bubble.position = pos;
             let _ = service_c.update_config(cfg);
         }
     });
@@ -384,8 +520,8 @@ fn create_bubble_settings(config_service: &ConfigService, window: &ApplicationWi
     duration_adj.connect_value_changed(move |adj| {
         let val = (adj.value() * 1000.0) as u64;
         let mut cfg = service_c.get_config();
-        if cfg.bubble_timeout_ms != val {
-            cfg.bubble_timeout_ms = val;
+        if cfg.bubble.timeout_ms != val {
+            cfg.bubble.timeout_ms = val;
             let _ = service_c.update_config(cfg);
         }
     });
@@ -393,8 +529,8 @@ fn create_bubble_settings(config_service: &ConfigService, window: &ApplicationWi
     let service_c = config_service.clone();
     draggable_switch.connect_state_set(move |_, state| {
         let mut cfg = service_c.get_config();
-        if cfg.bubble_draggable != state {
-            cfg.bubble_draggable = state;
+        if cfg.bubble.draggable != state {
+            cfg.bubble.draggable = state;
             let _ = service_c.update_config(cfg);
         }
         glib::Propagation::Proceed
@@ -468,10 +604,10 @@ fn create_action_row(title: &str, subtitle: Option<&str>) -> ActionRow {
 
     if let Some(sub) = subtitle {
         let sub_lbl = Label::builder()
-            .label(sub)
-            .xalign(0.0)
-            .css_classes(vec!["caption", "dim-label"])
-            .build();
+        .label(sub)
+        .xalign(0.0)
+        .css_classes(vec!["caption", "dim-label"])
+        .build();
         text_box.append(&sub_lbl);
     }
 
@@ -521,7 +657,7 @@ fn setup_hotkey_capture(
                     HotkeyType::KeystrokeActivation => {
                         cfg.keystroke_hotkey = accelerator.to_string()
                     }
-                    HotkeyType::BubbleActivation => cfg.bubble_hotkey = accelerator.to_string(),
+                    HotkeyType::BubbleActivation => cfg.bubble.hotkey = accelerator.to_string(),
                     HotkeyType::Pause => cfg.pause_hotkey = accelerator.to_string(),
                     HotkeyType::ToggleFocus => cfg.toggle_focus_hotkey = accelerator.to_string(),
                 }

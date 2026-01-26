@@ -93,6 +93,34 @@ impl Position {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+pub struct BubbleConfig {
+    pub font_family: String,
+    pub font_size: f64,
+    pub color: String,
+    pub sound_enabled: bool,
+    pub position: Position,
+    pub draggable: bool,
+    pub hotkey: String,
+    pub timeout_ms: u64,
+}
+
+impl Default for BubbleConfig {
+    fn default() -> Self {
+        Self {
+            font_family: "Sans".to_string(),
+            font_size: 1.0,
+            color: "#3584e4".to_string(),
+            sound_enabled: false,
+            position: Position::TopRight,
+            draggable: false,
+            hotkey: "<Shift><Control>b".to_string(),
+            timeout_ms: DEFAULT_BUBBLE_TIMEOUT_MS,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct KeystrokeConfig {
     pub display_mode: DisplayMode,
@@ -100,8 +128,6 @@ pub struct KeystrokeConfig {
     pub position: Position,
 
     pub display_timeout_ms: u64,
-
-    pub bubble_timeout_ms: u64,
 
     pub max_keys: usize,
 
@@ -115,21 +141,9 @@ pub struct KeystrokeConfig {
 
     pub opacity: f64,
 
-    pub keystroke_font_size: f64,
+    pub font_family: String,
 
-    pub bubble_font_size: f64,
-
-    pub bubble_font_family: String,
-
-    pub bubble_color: String,
-
-    pub bubble_sound_enabled: bool,
-
-    pub bubble_position: Position,
-
-    pub bubble_draggable: bool,
-
-    pub bubble_hotkey: String,
+    pub font_size: f64,
 
     pub keystroke_theme: String,
 
@@ -144,6 +158,8 @@ pub struct KeystrokeConfig {
     pub auto_detect_layout: bool,
 
     pub keyboard_layout: Option<String>,
+
+    pub bubble: BubbleConfig,
 }
 
 impl Default for KeystrokeConfig {
@@ -152,21 +168,14 @@ impl Default for KeystrokeConfig {
             display_mode: DisplayMode::Keystroke,
             position: Position::BottomCenter,
             display_timeout_ms: DEFAULT_DISPLAY_TIMEOUT_MS,
-            bubble_timeout_ms: DEFAULT_BUBBLE_TIMEOUT_MS,
             max_keys: DEFAULT_MAX_KEYS,
             margin: DEFAULT_MARGIN,
             show_modifiers: true,
             all_keyboards: true,
             font_scale: 1.0,
             opacity: 0.9,
-            keystroke_font_size: 1.2,
-            bubble_font_size: 1.0,
-            bubble_font_family: "Sans".to_string(),
-            bubble_color: "#3584e4".to_string(),
-            bubble_sound_enabled: false,
-            bubble_position: Position::TopRight,
-            bubble_draggable: false,
-            bubble_hotkey: "<Shift><Control>b".to_string(),
+            font_family: "Sans".to_string(),
+            font_size: 1.2,
             keystroke_theme: "system".to_string(),
             keystroke_draggable: false,
             keystroke_hotkey: "<Shift><Control>k".to_string(),
@@ -174,6 +183,7 @@ impl Default for KeystrokeConfig {
             toggle_focus_hotkey: "<Control>b".to_string(),
             auto_detect_layout: true,
             keyboard_layout: None,
+            bubble: BubbleConfig::default(),
         }
     }
 }

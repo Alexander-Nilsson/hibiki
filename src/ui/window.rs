@@ -5,10 +5,20 @@ use gtk4::{Application, ApplicationWindow, CssProvider};
 use gtk4_layer_shell::{Edge, Layer, LayerShell};
 use tracing::info;
 
-fn generate_overlay_css(keystroke_font_size: f64, bubble_font_size: f64) -> String {
+fn generate_overlay_css(
+    keystroke_font_family: &str,
+    keystroke_font_size: f64,
+    bubble_font_family: &str,
+    bubble_font_size: f64,
+) -> String {
+    let safe_ks_family = keystroke_font_family.replace('"', "\\\"");
+    let safe_bubble_family = bubble_font_family.replace('"', "\\\"");
+
     let overlay = format!(
         include_str!("../../style/overlay.css"),
+        keystroke_font_family = safe_ks_family,
         keystroke_font_size = keystroke_font_size,
+        bubble_font_family = safe_bubble_family,
         bubble_font_size = bubble_font_size
     );
     format!("{}\n{}", include_str!("../../style/defaults.css"), overlay)
@@ -40,8 +50,6 @@ pub fn create_window(app: &Application, config: &Config) -> Result<ApplicationWi
 
     window.set_exclusive_zone(0);
 
-    apply_css(&window, config);
-
     window.add_css_class("keystroke-window");
 
     info!(
@@ -52,18 +60,14 @@ pub fn create_window(app: &Application, config: &Config) -> Result<ApplicationWi
     Ok(window)
 }
 
-fn apply_css(window: &ApplicationWindow, config: &Config) {
-    let provider = CssProvider::new();
-    let css = generate_overlay_css(config.keystroke_font_size, config.bubble_font_size);
-    provider.load_from_string(&css);
-
-    let display = gtk4::prelude::WidgetExt::display(window);
-
-    gtk4::style_context_add_provider_for_display(
-        &display,
-        &provider,
-        gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+pub fn update_css_provider(provider: &CssProvider, config: &Config) {
+    let css = generate_overlay_css(
+        &config.font_family,
+        config.font_size,
+        &config.bubble.font_family,
+        config.bubble.font_size,
     );
+    provider.load_from_string(&css);
 }
 
 #[allow(dead_code)]
@@ -110,8 +114,6 @@ pub fn create_bubble_window(app: &Application, config: &Config) -> Result<Applic
     window.set_margin(Edge::Right, config.margin);
 
     window.set_exclusive_zone(0);
-
-    apply_css(&window, config);
 
     window.add_css_class("bubble-window");
 
