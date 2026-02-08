@@ -1,9 +1,9 @@
 [package]
 name = "keystroke"
-version = "0.1.0"
+version = "0.1.5"
 edition = "2021"
 authors = ["linuxmobile"]
-description = "A GTK4 Layer Shell keystroke visualizer for Wayland compositors"
+description = "Keystroke - Most beautiful Keystroke visualizer"
 license = "MIT"
 repository = "https://github.com/linuxmobile/keystroke"
 keywords = ["wayland", "gtk4", "layer-shell", "keyboard", "screencast"]

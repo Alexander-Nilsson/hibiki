@@ -475,10 +475,7 @@ fn create_keystroke_settings(
         .build();
 
     let dur_val_label = Label::builder()
-        .label(format!(
-            "{:.1}s",
-            config.display_timeout_ms as f64 / 1000.0
-        ))
+        .label(format!("{:.1}s", config.display_timeout_ms as f64 / 1000.0))
         .css_classes(vec!["badge"])
         .build();
 
