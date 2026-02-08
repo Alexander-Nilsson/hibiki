@@ -1,6 +1,7 @@
 use crate::application::config_service::ConfigService;
 use crate::application::typography_service::TypographyService;
-use crate::domain::config::Position;
+use crate::domain::config::{AudioConfig, Position};
+use crate::infrastructure::audio::SoundPackLoader;
 use gtk4::prelude::*;
 use gtk4::{
     glib, Adjustment, Align, Application, ApplicationWindow, Box as GtkBox, Button, DropDown,
@@ -53,7 +54,8 @@ pub fn create_settings_window(
         .hscrollbar_policy(gtk4::PolicyType::Never)
         .vexpand(true)
         .build();
-    let keystroke_content = create_keystroke_settings(&config_service, &typography_service, &window);
+    let keystroke_content =
+        create_keystroke_settings(&config_service, &typography_service, &window);
     keystroke_scroll.set_child(Some(&keystroke_content));
     stack.add_titled(&keystroke_scroll, Some("keystroke"), "Keystrokes");
 
@@ -298,6 +300,12 @@ fn create_keystroke_settings(
     pause_row.add_suffix(&pause_btn);
     behavior_list.append(&pause_row.row);
 
+    let service_c = config_service.clone();
+    create_audio_group(&content_box, config.audio.clone(), move |modifier| {
+        let mut cfg = service_c.get_config();
+        modifier(&mut cfg.audio);
+        let _ = service_c.update_config(cfg);
+    });
 
     let service_c = config_service.clone();
     let theme_light_c = theme_light.clone();
@@ -501,6 +509,12 @@ fn create_bubble_settings(
     focus_row.add_suffix(&focus_btn);
     behavior_list.append(&focus_row.row);
 
+    let service_c = config_service.clone();
+    create_audio_group(&content_box, config.bubble.audio.clone(), move |modifier| {
+        let mut cfg = service_c.get_config();
+        modifier(&mut cfg.bubble.audio);
+        let _ = service_c.update_config(cfg);
+    });
 
     let service_c = config_service.clone();
     position_dropdown.connect_selected_notify(move |dd| {
@@ -604,10 +618,10 @@ fn create_action_row(title: &str, subtitle: Option<&str>) -> ActionRow {
 
     if let Some(sub) = subtitle {
         let sub_lbl = Label::builder()
-        .label(sub)
-        .xalign(0.0)
-        .css_classes(vec!["caption", "dim-label"])
-        .build();
+            .label(sub)
+            .xalign(0.0)
+            .css_classes(vec!["caption", "dim-label"])
+            .build();
         text_box.append(&sub_lbl);
     }
 
@@ -681,6 +695,73 @@ fn setup_hotkey_capture(
         btn.set_label("Press keys...");
         btn.add_css_class("suggested-action");
     });
+}
+
+fn create_audio_group<F>(parent: &GtkBox, config: AudioConfig, update_fn: F)
+where
+    F: Fn(Box<dyn Fn(&mut AudioConfig)>) + 'static + Clone,
+{
+    let group = create_preferences_group("Audio", parent);
+
+    let enabled_row = create_action_row("Enable Audio", Some("Play sounds on key press"));
+    let enabled_switch = Switch::builder()
+        .active(config.enabled)
+        .valign(Align::Center)
+        .build();
+
+    let update_c = update_fn.clone();
+    enabled_switch.connect_state_set(move |_, state| {
+        update_c(Box::new(move |cfg| cfg.enabled = state));
+        glib::Propagation::Proceed
+    });
+    enabled_row.add_suffix(&enabled_switch);
+    group.append(&enabled_row.row);
+
+    let pack_row = create_action_row("Sound Pack", Some("Select sound theme"));
+    let packs = SoundPackLoader::list_available_packs();
+    let pack_model = StringList::new(&packs.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+    let pack_dropdown = DropDown::builder()
+        .model(&pack_model)
+        .enable_search(true)
+        .valign(Align::Center)
+        .width_request(200)
+        .build();
+
+    if let Some(idx) = packs.iter().position(|p| *p == config.sound_pack) {
+        pack_dropdown.set_selected(idx as u32);
+    }
+
+    let update_c = update_fn.clone();
+    let packs_c = packs.clone();
+    pack_dropdown.connect_selected_notify(move |dd| {
+        let idx = dd.selected() as usize;
+        if let Some(pack_name) = packs_c.get(idx) {
+            let pack_name = pack_name.clone();
+            update_c(Box::new(move |cfg| cfg.sound_pack = pack_name.clone()));
+        }
+    });
+    pack_row.add_suffix(&pack_dropdown);
+    group.append(&pack_row.row);
+
+    let volume_row = create_action_row("Volume", Some("Adjust sound volume"));
+    let volume_adj = Adjustment::new(config.volume as f64 * 100.0, 0.0, 100.0, 5.0, 10.0, 0.0);
+    let volume_scale = Scale::builder()
+        .orientation(Orientation::Horizontal)
+        .adjustment(&volume_adj)
+        .draw_value(true)
+        .value_pos(gtk4::PositionType::Right)
+        .width_request(120)
+        .hexpand(true)
+        .valign(Align::Center)
+        .build();
+
+    let update_c = update_fn.clone();
+    volume_adj.connect_value_changed(move |adj| {
+        let val = (adj.value() / 100.0) as f32;
+        update_c(Box::new(move |cfg| cfg.volume = val));
+    });
+    volume_row.add_suffix(&volume_scale);
+    group.append(&volume_row.row);
 }
 
 fn is_modifier(key: gtk4::gdk::Key) -> bool {

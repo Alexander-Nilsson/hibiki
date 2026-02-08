@@ -1,9 +1,11 @@
+use crate::application::audio_dispatcher::{AudioDispatcher, AudioEngine};
 use crate::application::config_service::ConfigService;
 use crate::application::feedback_service::FeedbackService;
 use crate::application::routing::{RoutingEngine, RoutingResult};
 use crate::application::typography_service::TypographyService;
 use crate::compositor::LayoutEvent;
 use crate::domain::CaptureState;
+use crate::infrastructure::audio::SoundPackLoader;
 use crate::input::{
     InputControlCommand, KeyEvent, KeyListener, LayoutManager, ListenerConfig, ListenerHandle,
 };
@@ -18,6 +20,7 @@ use gtk4::glib::{self, ControlFlow};
 use gtk4::prelude::*;
 use gtk4::{Application, ApplicationWindow, CssProvider};
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -27,6 +30,9 @@ use tracing::{debug, error, info, warn};
 pub struct App {
     gtk_app: Application,
     config_service: ConfigService,
+    #[allow(dead_code)]
+    audio_engine: Option<AudioEngine>,
+    audio_dispatcher: Option<AudioDispatcher>,
 }
 
 #[derive(Default)]
@@ -43,6 +49,7 @@ struct RuntimeState {
     feedback_service: Option<FeedbackService>,
     drag_controllers: Vec<gtk4::EventController>,
     css_provider: Option<CssProvider>,
+    audio_dispatcher: Option<AudioDispatcher>,
 }
 
 impl App {
@@ -52,15 +59,35 @@ impl App {
             .application_id("dev.linuxmobile.keystroke")
             .build();
 
-        Self { gtk_app, config_service }
+        let (audio_engine, audio_dispatcher) = match AudioEngine::new() {
+            Ok((e, d)) => (Some(e), Some(d)),
+            Err(e) => {
+                warn!("Failed to initialize audio engine: {}", e);
+                (None, None)
+            }
+        };
+
+        Self {
+            gtk_app,
+            config_service,
+            audio_engine,
+            audio_dispatcher,
+        }
     }
 
     #[must_use]
     pub fn run_with_tray(self, tray_rx: Receiver<TrayAction>, tray_handle: TrayHandle) -> i32 {
         let config_service = self.config_service.clone();
+        let audio_dispatcher = self.audio_dispatcher.clone();
 
         self.gtk_app.connect_activate(move |app| {
-            activate(app, &config_service, tray_rx.clone(), tray_handle.clone());
+            activate(
+                app,
+                &config_service,
+                tray_rx.clone(),
+                tray_handle.clone(),
+                audio_dispatcher.clone(),
+            );
         });
 
         let exit_code = self.gtk_app.run_with_args::<&str>(&[]);
@@ -71,9 +98,10 @@ impl App {
     #[must_use]
     pub fn run(self) -> i32 {
         let config_service = self.config_service.clone();
+        let audio_dispatcher = self.audio_dispatcher.clone();
 
         self.gtk_app.connect_activate(move |app| {
-            activate_without_tray(app, &config_service);
+            activate_without_tray(app, &config_service, audio_dispatcher.clone());
         });
 
         let exit_code = self.gtk_app.run_with_args::<&str>(&[]);
@@ -83,25 +111,30 @@ impl App {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-fn activate_without_tray(app: &Application, config_service: &ConfigService) {
+fn activate_without_tray(
+    app: &Application,
+    config_service: &ConfigService,
+    audio_dispatcher: Option<AudioDispatcher>,
+) {
     info!("Activating keystroke application (no tray)");
 
     let state = Rc::new(RefCell::new(RuntimeState::default()));
     state.borrow_mut().feedback_service = Some(FeedbackService::new(app));
-    
+    state.borrow_mut().audio_dispatcher = audio_dispatcher;
+
     let config = config_service.get_config();
     {
         let mut s = state.borrow_mut();
         s.routing_engine.update_config(
-            &config.keystroke_hotkey, 
+            &config.keystroke_hotkey,
             &config.bubble.hotkey,
             &config.pause_hotkey,
-            &config.toggle_focus_hotkey
+            &config.toggle_focus_hotkey,
         );
     }
 
     let css_provider = load_css_defaults();
-    
+
     crate::ui::update_css_provider(&css_provider, &config);
     state.borrow_mut().css_provider = Some(css_provider);
 
@@ -113,25 +146,27 @@ fn activate(
     config_service: &ConfigService,
     tray_rx: Receiver<TrayAction>,
     tray_handle: TrayHandle,
+    audio_dispatcher: Option<AudioDispatcher>,
 ) {
     info!("Activating keystroke application");
 
     let state = Rc::new(RefCell::new(RuntimeState::default()));
     state.borrow_mut().feedback_service = Some(FeedbackService::new(app));
-    
+    state.borrow_mut().audio_dispatcher = audio_dispatcher;
+
     let config = config_service.get_config();
     {
         let mut s = state.borrow_mut();
         s.routing_engine.update_config(
-            &config.keystroke_hotkey, 
+            &config.keystroke_hotkey,
             &config.bubble.hotkey,
             &config.pause_hotkey,
-            &config.toggle_focus_hotkey
+            &config.toggle_focus_hotkey,
         );
     }
 
     let css_provider = load_css_defaults();
-    
+
     crate::ui::update_css_provider(&css_provider, &config);
     state.borrow_mut().css_provider = Some(css_provider);
 
@@ -146,7 +181,6 @@ fn activate(
     );
 }
 
-
 fn setup_launcher_and_modes(
     app: &Application,
     state: &Rc<RefCell<RuntimeState>>,
@@ -155,7 +189,7 @@ fn setup_launcher_and_modes(
     let app_for_mode = app.clone();
     let state_for_mode = Rc::clone(state);
     let service_for_mode = config_service.clone();
-    
+
     let on_mode_select = move |mode| {
         debug!("Mode selected: {:?}", mode);
         switch_mode(&app_for_mode, &state_for_mode, &service_for_mode, mode);
@@ -164,10 +198,14 @@ fn setup_launcher_and_modes(
     let app_for_settings = app.clone();
     let state_for_settings = Rc::clone(state);
     let service_for_settings = config_service.clone();
-    
+
     let on_settings = move || {
         debug!("Opening settings from launcher");
-        open_settings(&app_for_settings, &state_for_settings, service_for_settings.clone());
+        open_settings(
+            &app_for_settings,
+            &state_for_settings,
+            service_for_settings.clone(),
+        );
     };
 
     let launcher = create_launcher_window(app, on_mode_select, on_settings);
@@ -212,7 +250,7 @@ fn close_mode_windows(state: &Rc<RefCell<RuntimeState>>) {
 
     s.listener_handle = None;
     s.layout_manager = None;
-    
+
     if let Some(window) = &s.keystroke_window {
         for controller in &s.drag_controllers {
             window.remove_controller(controller);
@@ -272,7 +310,7 @@ fn handle_tray_action(
             open_settings(app, state, config_service.clone());
         }
         TrayAction::TogglePause => {
-             debug!("Handling TogglePause action");
+            debug!("Handling TogglePause action");
             let mut s = state.borrow_mut();
             let new_state = s.routing_engine.toggle_capture();
             let paused = new_state == CaptureState::Paused;
@@ -296,7 +334,10 @@ fn handle_tray_action(
             }
             drop(s);
             tray_handle.set_paused(paused);
-            info!("Keystroke capture {}", if paused { "paused" } else { "resumed" });
+            info!(
+                "Keystroke capture {}",
+                if paused { "paused" } else { "resumed" }
+            );
         }
         TrayAction::Quit => {
             debug!("Handling Quit action");
@@ -338,7 +379,28 @@ fn start_keystroke_mode(
     info!("Starting keystroke mode");
 
     let config = config_service.get_config();
-    
+
+    if let Some(dispatcher) = &state.borrow().audio_dispatcher {
+        let current_pack = dispatcher.get_current_pack_name();
+        let target_pack = &config.audio.sound_pack;
+
+        info!(
+            "Current pack: {:?}, Target pack: {}",
+            current_pack, target_pack
+        );
+
+        if current_pack.is_none() || current_pack.as_deref() != Some(target_pack.as_str()) {
+            let path = SoundPackLoader::get_sound_pack_dir().join(target_pack);
+            info!("Loading initial sound pack from: {:?}", path);
+            if let Err(e) = dispatcher.load_pack(path) {
+                warn!("Failed to load sound pack '{}': {}", target_pack, e);
+            }
+        }
+
+        dispatcher.set_enabled(config.audio.enabled);
+        dispatcher.set_volume(config.audio.volume);
+    }
+
     {
         let mut s = state.borrow_mut();
         s.routing_engine.reset_mode_state();
@@ -365,7 +427,8 @@ fn start_keystroke_mode(
         ..Default::default()
     };
 
-    let listener = KeyListener::new(sender, listener_config);
+    let audio_dispatcher = state.borrow().audio_dispatcher.clone();
+    let listener = KeyListener::new(sender, listener_config, audio_dispatcher);
     let handle = listener.start()?;
 
     let mode_active = Arc::new(AtomicBool::new(true));
@@ -379,7 +442,7 @@ fn start_keystroke_mode(
     let active_key_loop = Arc::clone(&mode_active);
     let state_clone = Rc::clone(state);
     let display_clone = Rc::clone(&display);
-    
+
     let app_clone = app.clone();
     let config_service_clone = config_service.clone();
 
@@ -389,20 +452,24 @@ fn start_keystroke_mode(
                 break;
             }
 
-             let routing_result = match &event {
-                KeyEvent::Pressed(kd) => state_clone
-                    .borrow_mut()
-                    .routing_engine
-                    .process(kd.key, true, false, DisplayMode::Keystroke),
-                KeyEvent::Released(kd) => state_clone
-                    .borrow_mut()
-                    .routing_engine
-                    .process(kd.key, false, false, DisplayMode::Keystroke),
+            let routing_result = match &event {
+                KeyEvent::Pressed(kd) => state_clone.borrow_mut().routing_engine.process(
+                    kd.key,
+                    true,
+                    false,
+                    DisplayMode::Keystroke,
+                ),
+                KeyEvent::Released(kd) => state_clone.borrow_mut().routing_engine.process(
+                    kd.key,
+                    false,
+                    false,
+                    DisplayMode::Keystroke,
+                ),
                 KeyEvent::AllReleased => RoutingResult::Dispatch(evdev::Key::KEY_RESERVED, false),
             };
 
             match routing_result {
-                RoutingResult::Ignored => {},
+                RoutingResult::Ignored => {}
                 RoutingResult::StateChanged(capture, focus) => {
                     if let Some(service) = &state_clone.borrow().feedback_service {
                         service.handle_state_change(capture, focus);
@@ -412,7 +479,7 @@ fn start_keystroke_mode(
                     let app = app_clone.clone();
                     let state = state_clone.clone();
                     let service = config_service_clone.clone();
-                    
+
                     glib::MainContext::default().spawn_local(async move {
                         switch_mode(&app, &state, &service, mode);
                     });
@@ -440,16 +507,31 @@ fn start_keystroke_mode(
     glib::MainContext::default().spawn_local(async move {
         while rx.changed().await.is_ok() {
             if !active_c.load(Ordering::SeqCst) {
-                 break;
+                break;
             }
             let cfg = rx.borrow().clone();
-            
+
             state_c.borrow_mut().routing_engine.update_config(
-                &cfg.keystroke_hotkey, 
+                &cfg.keystroke_hotkey,
                 &cfg.bubble.hotkey,
                 &cfg.pause_hotkey,
-                &cfg.toggle_focus_hotkey
+                &cfg.toggle_focus_hotkey,
             );
+
+            if let Some(dispatcher) = &state_c.borrow().audio_dispatcher {
+                dispatcher.set_enabled(cfg.audio.enabled);
+                dispatcher.set_volume(cfg.audio.volume);
+
+                let current_pack = dispatcher.get_current_pack_name();
+                let target_pack = &cfg.audio.sound_pack;
+
+                if current_pack.as_deref() != Some(target_pack.as_str()) {
+                    let path = SoundPackLoader::get_sound_pack_dir().join(target_pack);
+                    if let Err(e) = dispatcher.load_pack(path) {
+                        warn!("Failed to load sound pack '{}': {}", target_pack, e);
+                    }
+                }
+            }
 
             {
                 let mut disp = display_c.borrow_mut();
@@ -464,18 +546,18 @@ fn start_keystroke_mode(
             {
                 let mut s = state_c.borrow_mut();
                 let current_draggable = !s.drag_controllers.is_empty();
-                
+
                 if cfg.keystroke_draggable != current_draggable {
                     if cfg.keystroke_draggable {
-                         let controllers = setup_drag(&window_c);
-                         s.drag_controllers = controllers;
+                        let controllers = setup_drag(&window_c);
+                        s.drag_controllers = controllers;
                     } else {
-                         for c in &s.drag_controllers {
-                             window_c.remove_controller(c);
-                         }
-                         s.drag_controllers.clear();
-                         
-                         crate::ui::window::update_position(&window_c, cfg.position, cfg.margin);
+                        for c in &s.drag_controllers {
+                            window_c.remove_controller(c);
+                        }
+                        s.drag_controllers.clear();
+
+                        crate::ui::window::update_position(&window_c, cfg.position, cfg.margin);
                     }
                 }
             }
@@ -504,7 +586,22 @@ fn start_bubble_mode(
     info!("Starting bubble mode");
 
     let config = config_service.get_config();
-    
+
+    if let Some(dispatcher) = &state.borrow().audio_dispatcher {
+        dispatcher.set_enabled(config.bubble.audio.enabled);
+        dispatcher.set_volume(config.bubble.audio.volume);
+
+        let current_pack = dispatcher.get_current_pack_name();
+        let target_pack = &config.bubble.audio.sound_pack;
+
+        if current_pack.as_deref() != Some(target_pack.as_str()) {
+            let path = PathBuf::from("assets/sounds").join(target_pack);
+            if let Err(e) = dispatcher.load_pack(path) {
+                warn!("Failed to load sound pack '{}': {}", target_pack, e);
+            }
+        }
+    }
+
     {
         let mut s = state.borrow_mut();
         s.routing_engine.reset_mode_state();
@@ -518,8 +615,8 @@ fn start_bubble_mode(
     }
 
     let mut display_widget = BubbleDisplayWidget::new(config.bubble.timeout_ms);
-    
-     let mut layout_manager = if config.auto_detect_layout {
+
+    let mut layout_manager = if config.auto_detect_layout {
         let lm = LayoutManager::new();
         if let Err(e) = lm.init() {
             warn!("Failed to initialize layout detection: {}", e);
@@ -563,7 +660,8 @@ fn start_bubble_mode(
         ..Default::default()
     };
 
-    let listener = KeyListener::new(sender, listener_config);
+    let audio_dispatcher = state.borrow().audio_dispatcher.clone();
+    let listener = KeyListener::new(sender, listener_config, audio_dispatcher);
     let handle = listener.start()?;
 
     {
@@ -586,34 +684,37 @@ fn start_bubble_mode(
     let active = Arc::clone(&mode_active);
     let state_clone = Rc::clone(state);
     let display_clone = Rc::clone(&display);
-    
+
     let app_clone = app.clone();
     let config_service_clone = config_service.clone();
 
     glib::MainContext::default().spawn_local(async move {
         let app = app_clone.clone();
         let config_service = config_service_clone.clone();
-        
-        while let Ok(event) = receiver.recv().await {
 
+        while let Ok(event) = receiver.recv().await {
             if !active.load(Ordering::SeqCst) {
                 break;
             }
 
             let routing_result = match &event {
-                KeyEvent::Pressed(kd) => state_clone
-                    .borrow_mut()
-                    .routing_engine
-                    .process(kd.key, true, true, DisplayMode::Bubble),
-                KeyEvent::Released(kd) => state_clone
-                    .borrow_mut()
-                    .routing_engine
-                    .process(kd.key, false, true, DisplayMode::Bubble),
+                KeyEvent::Pressed(kd) => state_clone.borrow_mut().routing_engine.process(
+                    kd.key,
+                    true,
+                    true,
+                    DisplayMode::Bubble,
+                ),
+                KeyEvent::Released(kd) => state_clone.borrow_mut().routing_engine.process(
+                    kd.key,
+                    false,
+                    true,
+                    DisplayMode::Bubble,
+                ),
                 KeyEvent::AllReleased => RoutingResult::Dispatch(evdev::Key::KEY_RESERVED, false),
             };
 
             match routing_result {
-                RoutingResult::Ignored => {},
+                RoutingResult::Ignored => {}
                 RoutingResult::StateChanged(capture, focus) => {
                     if let Some(handle) = &state_clone.borrow().listener_handle {
                         if capture == CaptureState::Active
@@ -633,7 +734,7 @@ fn start_bubble_mode(
                     let app = app.clone();
                     let state = state_clone.clone();
                     let service = config_service.clone();
-                    
+
                     glib::MainContext::default().spawn_local(async move {
                         switch_mode(&app, &state, &service, mode);
                     });
@@ -655,7 +756,7 @@ fn start_bubble_mode(
         }
         debug!("Bubble event loop terminated");
     });
-    
+
     let active = Arc::clone(&mode_active);
     let state_clone = Rc::clone(state);
     let display_clone = Rc::clone(&display);
@@ -693,16 +794,31 @@ fn start_bubble_mode(
     glib::MainContext::default().spawn_local(async move {
         while rx.changed().await.is_ok() {
             if !active_c.load(Ordering::SeqCst) {
-                 break;
+                break;
             }
             let cfg = rx.borrow().clone();
-            
+
             state_c.borrow_mut().routing_engine.update_config(
-                &cfg.keystroke_hotkey, 
+                &cfg.keystroke_hotkey,
                 &cfg.bubble.hotkey,
                 &cfg.pause_hotkey,
-                &cfg.toggle_focus_hotkey
+                &cfg.toggle_focus_hotkey,
             );
+
+            if let Some(dispatcher) = &state_c.borrow().audio_dispatcher {
+                dispatcher.set_enabled(cfg.bubble.audio.enabled);
+                dispatcher.set_volume(cfg.bubble.audio.volume);
+
+                let current_pack = dispatcher.get_current_pack_name();
+                let target_pack = &cfg.bubble.audio.sound_pack;
+
+                if current_pack.as_deref() != Some(target_pack.as_str()) {
+                    let path = SoundPackLoader::get_sound_pack_dir().join(target_pack);
+                    if let Err(e) = dispatcher.load_pack(path) {
+                        warn!("Failed to load sound pack '{}': {}", target_pack, e);
+                    }
+                }
+            }
 
             {
                 let mut disp = display_c.borrow_mut();
@@ -717,22 +833,26 @@ fn start_bubble_mode(
             {
                 let mut s = state_c.borrow_mut();
                 let current_draggable = !s.drag_controllers.is_empty();
-                
+
                 if cfg.bubble.draggable != current_draggable {
                     if cfg.bubble.draggable {
-                         let controllers = setup_drag(&window_c);
-                         s.drag_controllers = controllers;
+                        let controllers = setup_drag(&window_c);
+                        s.drag_controllers = controllers;
                     } else {
-                         for c in &s.drag_controllers {
-                             window_c.remove_controller(c);
-                         }
-                         s.drag_controllers.clear();
-                         
-                         crate::ui::window::update_position(&window_c, cfg.bubble.position, cfg.margin);
+                        for c in &s.drag_controllers {
+                            window_c.remove_controller(c);
+                        }
+                        s.drag_controllers.clear();
+
+                        crate::ui::window::update_position(
+                            &window_c,
+                            cfg.bubble.position,
+                            cfg.margin,
+                        );
                     }
                 }
             }
-            
+
             if !cfg.bubble.draggable {
                 crate::ui::window::update_position(&window_c, cfg.bubble.position, cfg.margin);
             }
@@ -824,7 +944,7 @@ fn load_css_defaults() -> CssProvider {
     let provider = gtk4::CssProvider::new();
     let defaults = include_str!("../style/defaults.css");
     let settings = include_str!("../style/settings.css");
-    
+
     let bubble_css = include_str!("../style/bubble.css");
 
     provider.load_from_string(&format!("{defaults}\n{settings}\n{bubble_css}"));
@@ -836,6 +956,6 @@ fn load_css_defaults() -> CssProvider {
             gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
     }
-    
+
     provider
 }

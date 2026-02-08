@@ -1,3 +1,4 @@
+use crate::application::audio_dispatcher::AudioDispatcher;
 use crate::input::device::{discover_keyboards, KeyboardDevice};
 use crate::input::keymap::KeyDisplay;
 use anyhow::{Context, Result};
@@ -65,15 +66,21 @@ pub struct KeyListener {
     sender: Sender<KeyEvent>,
     running: Arc<AtomicBool>,
     config: ListenerConfig,
+    audio_dispatcher: Option<AudioDispatcher>,
 }
 
 impl KeyListener {
     #[must_use]
-    pub fn new(sender: Sender<KeyEvent>, config: ListenerConfig) -> Self {
+    pub fn new(
+        sender: Sender<KeyEvent>,
+        config: ListenerConfig,
+        audio_dispatcher: Option<AudioDispatcher>,
+    ) -> Self {
         Self {
             sender,
             running: Arc::new(AtomicBool::new(false)),
             config,
+            audio_dispatcher,
         }
     }
 
@@ -98,15 +105,20 @@ impl KeyListener {
             let sender = self.sender.clone();
             let running = Arc::clone(&self.running);
             let ignored_keys = self.config.ignored_keys.clone();
+            let audio_dispatcher = self.audio_dispatcher.clone();
 
-            // Create a dedicated channel for each keyboard thread
             let (control_tx, control_rx) = async_channel::unbounded::<InputControlCommand>();
             control_txs.push(control_tx);
 
             thread::spawn(move || {
-                if let Err(e) =
-                    listen_to_device(keyboard, sender, running, ignored_keys, control_rx)
-                {
+                if let Err(e) = listen_to_device(
+                    keyboard,
+                    sender,
+                    running,
+                    ignored_keys,
+                    control_rx,
+                    audio_dispatcher,
+                ) {
                     error!("Keyboard listener error: {}", e);
                 }
             });
@@ -135,6 +147,7 @@ fn listen_to_device(
     running: Arc<AtomicBool>,
     ignored_keys: HashSet<Key>,
     control_rx: Receiver<InputControlCommand>,
+    audio_dispatcher: Option<AudioDispatcher>,
 ) -> Result<()> {
     let mut device = keyboard.open()?;
     info!("Listening to keyboard: {}", keyboard.name);
@@ -203,9 +216,13 @@ fn listen_to_device(
 
         match poll_result {
             Ok(_n) => {
-                if let Err(e) =
-                    process_events(&mut device, &sender, &ignored_keys, &mut pressed_keys)
-                {
+                if let Err(e) = process_events(
+                    &mut device,
+                    &sender,
+                    &ignored_keys,
+                    &mut pressed_keys,
+                    &audio_dispatcher,
+                ) {
                     if e.to_string().contains("Channel closed") {
                         info!("Channel closed, stopping listener for {}", keyboard.name);
                         break;
@@ -250,6 +267,7 @@ fn process_events(
     sender: &Sender<KeyEvent>,
     ignored_keys: &HashSet<Key>,
     pressed_keys: &mut HashSet<Key>,
+    audio_dispatcher: &Option<AudioDispatcher>,
 ) -> Result<()> {
     let events = device.fetch_events().context("Failed to fetch events")?;
     let mut activity = false;
@@ -265,6 +283,9 @@ fn process_events(
                 1 => {
                     trace!("Key pressed: {:?}", key);
                     pressed_keys.insert(key);
+                    if let Some(dispatcher) = audio_dispatcher {
+                        dispatcher.play_key(key.code());
+                    }
                     KeyEvent::Pressed(KeyDisplay::new(key, true))
                 }
                 0 => {

@@ -93,11 +93,29 @@ impl Position {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+pub struct AudioConfig {
+    pub enabled: bool,
+    pub volume: f32,
+    pub sound_pack: String,
+}
+
+impl Default for AudioConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            volume: 1.0,
+            sound_pack: "cherrymx-blue-abs".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct BubbleConfig {
     pub font_family: String,
     pub font_size: f64,
     pub color: String,
-    pub sound_enabled: bool,
+    pub audio: AudioConfig,
     pub position: Position,
     pub draggable: bool,
     pub hotkey: String,
@@ -110,7 +128,7 @@ impl Default for BubbleConfig {
             font_family: "Sans".to_string(),
             font_size: 1.0,
             color: "#3584e4".to_string(),
-            sound_enabled: false,
+            audio: AudioConfig::default(),
             position: Position::TopRight,
             draggable: false,
             hotkey: "<Shift><Control>b".to_string(),
@@ -160,6 +178,8 @@ pub struct KeystrokeConfig {
     pub keyboard_layout: Option<String>,
 
     pub bubble: BubbleConfig,
+
+    pub audio: AudioConfig,
 }
 
 impl Default for KeystrokeConfig {
@@ -184,6 +204,7 @@ impl Default for KeystrokeConfig {
             auto_detect_layout: true,
             keyboard_layout: None,
             bubble: BubbleConfig::default(),
+            audio: AudioConfig::default(),
         }
     }
 }

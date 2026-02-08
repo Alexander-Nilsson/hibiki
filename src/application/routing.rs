@@ -94,10 +94,8 @@ impl RoutingEngine {
             return RoutingResult::Ignored;
         }
 
-        if self.focus_state == FocusState::Unfocused {
-            if current_mode == DisplayMode::Bubble {
-                return RoutingResult::Ignored;
-            }
+        if self.focus_state == FocusState::Unfocused && current_mode == DisplayMode::Bubble {
+            return RoutingResult::Ignored;
         }
 
         RoutingResult::Dispatch(key, pressed)

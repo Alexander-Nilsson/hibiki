@@ -26,6 +26,10 @@
           dbus
           libappindicator-gtk3
           libxkbcommon
+          alsa-lib
+          libpulseaudio
+          pipewire
+          libjack2
         ];
 
         buildInputs = with pkgs; [
@@ -38,6 +42,10 @@
           dbus
           libappindicator-gtk3
           libxkbcommon
+          alsa-lib
+          libpulseaudio
+          pipewire
+          libjack2
         ];
 
         nativeBuildInputs = with pkgs; [
@@ -57,6 +65,7 @@
           preFixup = ''
             gappsWrapperArgs+=(
               --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath runtimeDeps}"
+              --set ALSA_PLUGIN_DIR "${pkgs.pipewire}/lib/alsa-lib"
             )
           '';
         };
@@ -64,26 +73,21 @@
         apps.default = utils.lib.mkApp {drv = packages.default;};
 
         devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs;
-            [
-              (with toolchain; [
-                cargo
-                rustc
-                rustLibSrc
-              ])
-              clippy
-              rustfmt
-              rust-analyzer
-            ]
-            ++ buildInputs ++ nativeBuildInputs;
-
+          nativeBuildInputs = [
+            pkgs.rustc
+            pkgs.cargo
+            pkgs.clippy
+            pkgs.rustfmt
+            pkgs.rust-analyzer
+            pkgs.pkg-config
+          ];
+          buildInputs = buildInputs ++ nativeBuildInputs;
           RUST_SRC_PATH = "${toolchain.rustLibSrc}";
-
           PKG_CONFIG_PATH = "${pkgs.lib.makeSearchPath "lib/pkgconfig" buildInputs}";
 
-          LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath runtimeDeps}";
-
-          XDG_DATA_DIRS = "${pkgs.gtk4}/share/gsettings-schemas/${pkgs.gtk4.name}:${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:$XDG_DATA_DIRS";
+          shellHook = ''
+            export ALSA_PLUGIN_DIR="${pkgs.pipewire}/lib/alsa-lib"
+          '';
         };
       }
     );
