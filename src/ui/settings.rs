@@ -1185,7 +1185,7 @@ where
         let label = row_box.first_child().and_downcast::<Label>().unwrap();
 
         let name = if let Ok(map) = display_names_c.try_borrow() {
-            let map: &HashMap<String, String> = &*map;
+            let map: &HashMap<String, String> = &map;
             map.get(pack_id.as_str())
                 .cloned()
                 .unwrap_or_else(|| pack_id.to_string())
