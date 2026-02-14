@@ -10,6 +10,12 @@ fn main() -> Result<()> {
 
     info!("Starting Keystroke v{}", env!("CARGO_PKG_VERSION"));
 
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("Failed to create Tokio runtime");
+    let _guard = runtime.enter();
+
     let compositor = compositor::detect();
     info!("Detected compositor: {}", compositor);
 
