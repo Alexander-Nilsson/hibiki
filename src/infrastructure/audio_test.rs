@@ -51,6 +51,43 @@ mod tests {
     }
 
     #[test]
+    fn test_sound_file_traversal_protection() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.json");
+
+        let config_content = r#"{
+            "id": "test",
+            "name": "Test Pack",
+            "key_define_type": "single",
+            "includes_numpad": false,
+            "sound": "../secret.wav",
+            "defines": {}
+        }"#;
+
+        std::fs::write(&config_path, config_content).unwrap();
+
+        let result = SoundPackLoader::load_from_directory(dir.path());
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Forbidden path component"));
+    }
+
+    #[test]
+    fn test_path_traversal_protection() {
+        let dir = tempdir().unwrap();
+        // Malicious path with ..
+        let malicious_path = dir.path().join("../malicious");
+        let result = SoundPackLoader::load_from_directory(malicious_path);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Path traversal detected"));
+    }
+
+    #[test]
     fn test_audio_buffer_conversion() {
         let samples: Arc<[i16]> = Arc::new([0, 16383, 32767, -16384]);
         let buffer = AudioBuffer {

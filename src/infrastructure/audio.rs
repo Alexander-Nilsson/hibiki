@@ -96,6 +96,7 @@ impl Source for AudioBufferSource {
     }
 }
 
+#[derive(Debug)]
 pub struct LoadedSoundPack {
     pub config: MechvibesConfig,
     pub buffers: HashMap<String, AudioBuffer>,
@@ -103,16 +104,28 @@ pub struct LoadedSoundPack {
 
 pub struct SoundPackLoader;
 
-impl SoundPackLoader {
-    pub fn get_sound_pack_dir() -> PathBuf {
-        let candidates = [
-            "src/assets/sounds",
-            "assets/sounds",
-            "/usr/share/keystroke/sounds",
-            "/usr/local/share/keystroke/sounds",
-        ];
+const ALLOWED_SOUND_BASES: &[&str] = &[
+    "src/assets/sounds",
+    "assets/sounds",
+    "/usr/share/keystroke/sounds",
+    "/usr/local/share/keystroke/sounds",
+];
 
-        for path_str in candidates {
+impl SoundPackLoader {
+    fn safe_join(base: &Path, sub: &str) -> Result<PathBuf> {
+        let sub_path = Path::new(sub);
+        if sub_path.is_absolute()
+            || sub_path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            anyhow::bail!("Forbidden path component: {}", sub);
+        }
+        Ok(base.join(sub_path))
+    }
+
+    pub fn get_sound_pack_dir() -> PathBuf {
+        for path_str in ALLOWED_SOUND_BASES {
             let path = Path::new(path_str);
             if path.exists() && path.is_dir() {
                 return path.to_path_buf();
@@ -164,6 +177,44 @@ impl SoundPackLoader {
     pub fn load_from_directory(dir_path: impl AsRef<Path>) -> Result<LoadedSoundPack> {
         let dir_path = dir_path.as_ref();
 
+        if dir_path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            anyhow::bail!("Path traversal detected in sound pack path: {:?}", dir_path);
+        }
+
+        if dir_path.is_absolute() && !cfg!(test) {
+            let mut allowed = false;
+            if let Ok(canon_dir) = dir_path.canonicalize() {
+                for base in ALLOWED_SOUND_BASES {
+                    if let Ok(canon_base) = Path::new(base).canonicalize() {
+                        if canon_dir.starts_with(canon_base) {
+                            allowed = true;
+                            break;
+                        }
+                    }
+                }
+            } else if dir_path.file_name().and_then(|n| n.to_str()) == Some("default") {
+                if let Some(parent) = dir_path.parent() {
+                    if let Ok(canon_parent) = parent.canonicalize() {
+                        for base in ALLOWED_SOUND_BASES {
+                            if let Ok(canon_base) = Path::new(base).canonicalize() {
+                                if canon_parent.starts_with(canon_base) {
+                                    allowed = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !allowed {
+                anyhow::bail!("Access to absolute path is restricted: {:?}", dir_path);
+            }
+        }
+
         let effective_path = if dir_path.file_name().and_then(|n| n.to_str()) == Some("default")
             && !dir_path.exists()
         {
@@ -199,7 +250,7 @@ impl SoundPackLoader {
 
         match config.key_define_type {
             KeyDefineType::Single => {
-                let path = base_path.join(&config.sound);
+                let path = Self::safe_join(base_path, &config.sound)?;
                 if path.exists() {
                     match Self::load_file(&path) {
                         Ok(buffer) => {
@@ -217,7 +268,7 @@ impl SoundPackLoader {
                 for define in config.defines.values() {
                     if let KeyDefine::Multi(Some(filename)) = define {
                         if !buffers.contains_key(filename) {
-                            let path = base_path.join(filename);
+                            let path = Self::safe_join(base_path, filename)?;
                             if path.exists() {
                                 match Self::load_file(&path) {
                                     Ok(buffer) => {
