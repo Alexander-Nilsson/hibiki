@@ -1,6 +1,6 @@
-# Keystroke
+# 響 (Hibiki)
 
-![Keystroke Demo](./assets/showcase.gif)
+![Hibiki Demo](./assets/showcase.gif)
 
 A GTK4 Layer Shell keystroke visualizer for Wayland compositors, built specifically for Wayland. While tools like showmethekey exist, I've always felt they lacked a bit of that "modern" aesthetic. So, heavily inspired by the look of [KeyCastr](https://github.com/keycastr/keycastr), I decided to build my own version.
 
@@ -27,7 +27,7 @@ And yes, it's written in Rust, so you already know it's blazing fast and memory-
 
 ## Supported Compositors
 
-Keystroke attempts to automatically detect your running compositor.
+Hibiki attempts to automatically detect your running compositor.
 
 | Compositor    | Support Level           | Notes                                                  |
 | ------------- | ----------------------- | ------------------------------------------------------ |
@@ -64,10 +64,10 @@ Flake support is included!
 
 ```bash
 # Run directly
-nix run github:linuxmobile/keystroke
+nix run github:linuxmobile/hibiki
 
 # Build
-nix build github:linuxmobile/keystroke
+nix build github:linuxmobile/hibiki
 
 # Develop
 nix develop
