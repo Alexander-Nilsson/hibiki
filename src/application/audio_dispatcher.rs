@@ -1,5 +1,6 @@
 use crate::domain::audio::KeyDefine;
 use crate::infrastructure::audio::{LoadedSoundPack, SoundPackLoader};
+use crate::input::keymap::map_evdev_to_mechvibes;
 use anyhow::Result;
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use rodio::{OutputStream, OutputStreamBuilder, Source};
@@ -191,29 +192,49 @@ impl AudioDispatcher {
         }
 
         if let Some(pack) = &state.pack {
-            let key_str = keycode.to_string();
+            // 1. Try raw keycode first
+            let raw_key = keycode.to_string();
 
-            if let Some(define) = pack.config.defines.get(&key_str) {
-                match define {
-                    KeyDefine::Multi(Some(filename)) => {
-                        if let Some(buffer) = pack.buffers.get(filename) {
-                            let source = buffer.to_source().amplify(state.volume);
-                            let _ = self.cmd_tx.try_send(PlayCommand::Play(Box::new(source)));
-                        }
-                    }
-                    KeyDefine::Single(range) => {
-                        if range.len() >= 2 {
-                            let start = range[0];
-                            let duration = range[1];
-                            if let Some(buffer) = pack.buffers.get("main") {
-                                let source = buffer
-                                    .to_source_slice(start, duration)
-                                    .amplify(state.volume);
+            // 2. Try mapped keycode (Mechvibes scancode)
+            let mapped_key = map_evdev_to_mechvibes(keycode).map(|k| k.to_string());
+
+            // 3. Fallback to generic key (e.g. "30" for 'A') if neither works
+            let fallback_key = "30".to_string();
+
+            let target_key = if pack.config.defines.contains_key(&raw_key) {
+                Some(raw_key)
+            } else if let Some(mapped) = mapped_key.as_ref().filter(|k| pack.config.defines.contains_key(*k)) {
+                Some(mapped.clone())
+            } else if pack.config.defines.contains_key(&fallback_key) {
+                // If the key is not defined, use the fallback
+                Some(fallback_key)
+            } else {
+                None
+            };
+
+            if let Some(key_to_play) = target_key {
+                if let Some(define) = pack.config.defines.get(&key_to_play) {
+                    match define {
+                        KeyDefine::Multi(Some(filename)) => {
+                            if let Some(buffer) = pack.buffers.get(filename) {
+                                let source = buffer.to_source().amplify(state.volume);
                                 let _ = self.cmd_tx.try_send(PlayCommand::Play(Box::new(source)));
                             }
                         }
+                        KeyDefine::Single(range) => {
+                            if range.len() >= 2 {
+                                let start = range[0];
+                                let duration = range[1];
+                                if let Some(buffer) = pack.buffers.get("main") {
+                                    let source = buffer
+                                        .to_source_slice(start, duration)
+                                        .amplify(state.volume);
+                                    let _ = self.cmd_tx.try_send(PlayCommand::Play(Box::new(source)));
+                                }
+                            }
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
         }
