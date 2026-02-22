@@ -134,19 +134,9 @@ pub struct BubbleConfig {
 
 impl Validate for BubbleConfig {
     fn validate(&mut self) {
-        if self.font_size <= 0.0 {
-            self.font_size = 1.0;
-        }
-        if self.font_size > 10.0 {
-            self.font_size = 10.0;
-        }
+        self.font_size = self.font_size.clamp(1.0, 10.0);
 
-        if self.timeout_ms < 100 {
-            self.timeout_ms = 100;
-        }
-        if self.timeout_ms > 30000 {
-            self.timeout_ms = 30000;
-        }
+        self.timeout_ms = self.timeout_ms.clamp(100, 30000);
 
         self.audio.validate();
     }
@@ -214,42 +204,17 @@ pub struct KeystrokeConfig {
 
 impl Validate for KeystrokeConfig {
     fn validate(&mut self) {
-        if self.display_timeout_ms < 100 {
-            self.display_timeout_ms = 100;
-        }
-        if self.display_timeout_ms > 30000 {
-            self.display_timeout_ms = 30000;
-        }
+        self.display_timeout_ms = self.display_timeout_ms.clamp(100, 30000);
 
-        if self.max_keys == 0 {
-            self.max_keys = 1;
-        }
-        if self.max_keys > 50 {
-            self.max_keys = 50;
-        }
+        self.max_keys = self.max_keys.clamp(1, 50);
 
-        if self.font_scale <= 0.0 {
-            self.font_scale = 1.0;
-        }
-        if self.font_scale > 10.0 {
-            self.font_scale = 10.0;
-        }
+        self.font_scale = self.font_scale.clamp(1.0, 10.0);
 
         self.opacity = self.opacity.clamp(0.0, 1.0);
 
-        if self.font_size <= 0.0 {
-            self.font_size = 1.0;
-        }
-        if self.font_size > 10.0 {
-            self.font_size = 10.0;
-        }
+        self.font_size = self.font_size.clamp(1.0, 10.0);
 
-        if self.margin < -100 {
-            self.margin = -100;
-        }
-        if self.margin > 1000 {
-            self.margin = 1000;
-        }
+        self.margin = self.margin.clamp(-100, 1000);
 
         self.bubble.validate();
         self.audio.validate();
