@@ -112,9 +112,8 @@ fn parse_layout_name(name: &str) -> (&str, &str) {
         return (layout, variant);
     }
 
-    let name_lower = name.to_lowercase();
     for (key, value) in LAYOUT_NAME_MAP.iter() {
-        if key.to_lowercase() == name_lower {
+        if key.eq_ignore_ascii_case(name) {
             return *value;
         }
     }
