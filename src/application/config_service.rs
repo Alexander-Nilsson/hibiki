@@ -1,4 +1,4 @@
-use crate::domain::config::{KeystrokeConfig, Validate};
+use crate::domain::config::KeystrokeConfig;
 use crate::infrastructure::settings_repository::SettingsRepository;
 use anyhow::Result;
 use std::sync::Arc;
@@ -10,7 +10,6 @@ use tracing::error;
 pub struct ConfigService {
     tx: Arc<watch::Sender<KeystrokeConfig>>,
     rx: watch::Receiver<KeystrokeConfig>,
-    repository: Arc<SettingsRepository>,
 }
 
 impl ConfigService {
@@ -43,26 +42,11 @@ impl ConfigService {
                 let mut last_saved_config = rx_clone.borrow().clone();
 
                 loop {
-                    // Wait for the next change
                     if rx_clone.changed().await.is_err() {
                         break;
                     }
 
-                    // Debounce: wait for a period of inactivity or a timeout
-                    loop {
-                        tokio::select! {
-                            _ = tokio::time::sleep(Duration::from_millis(500)) => {
-                                break;
-                            }
-                            res = rx_clone.changed() => {
-                                if res.is_err() {
-                                    return;
-                                }
-                                // Mark as seen to reset the changed() state for the next select iteration
-                                let _ = rx_clone.borrow_and_update();
-                            }
-                        }
-                    }
+                    tokio::time::sleep(Duration::from_millis(500)).await;
 
                     let new_config = rx_clone.borrow_and_update().clone();
                     if new_config != last_saved_config {
@@ -79,7 +63,6 @@ impl ConfigService {
         Ok(Self {
             tx: Arc::new(tx),
             rx,
-            repository,
         })
     }
 
