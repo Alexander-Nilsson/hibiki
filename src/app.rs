@@ -20,7 +20,6 @@ use gtk4::glib::{self, ControlFlow};
 use gtk4::prelude::*;
 use gtk4::{Application, ApplicationWindow, CssProvider};
 use std::cell::RefCell;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -613,7 +612,7 @@ fn start_bubble_mode(
         let target_pack = &config.bubble.audio.sound_pack;
 
         if current_pack.as_deref() != Some(target_pack.as_str()) {
-            let path = PathBuf::from("assets/sounds").join(target_pack);
+            let path = crate::infrastructure::audio::SoundPackLoader::get_sound_pack_dir().join(target_pack);
             if let Err(e) = dispatcher.load_pack(path) {
                 warn!("Failed to load sound pack '{}': {}", target_pack, e);
             }

@@ -78,13 +78,13 @@ impl KeyDisplayWidget {
             #[allow(deprecated)]
             let fg = style_context
                 .lookup_color("accent_fg_color")
-                .unwrap_or_else(|| gtk4::gdk::RGBA::WHITE);
+                .unwrap_or(gtk4::gdk::RGBA::WHITE);
 
             #[allow(deprecated)]
             let bg = style_context
                 .lookup_color("accent_bg_color")
                 .or_else(|| style_context.lookup_color("theme_selected_bg_color"))
-                .unwrap_or_else(|| gtk4::gdk::RGBA::new(0.18, 0.76, 0.49, 1.0));
+                .unwrap_or(gtk4::gdk::RGBA::new(0.18, 0.76, 0.49, 1.0));
 
             (to_hex(bg), to_hex(fg))
         };

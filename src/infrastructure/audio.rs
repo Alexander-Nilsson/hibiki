@@ -125,6 +125,13 @@ impl SoundPackLoader {
     }
 
     pub fn get_sound_pack_dir() -> PathBuf {
+        if let Ok(env_path) = std::env::var("HIBIKI_SOUNDS_DIR") {
+            let path = PathBuf::from(env_path);
+            if path.exists() && path.is_dir() {
+                return path;
+            }
+        }
+
         for path_str in ALLOWED_SOUND_BASES {
             let path = Path::new(path_str);
             if path.exists() && path.is_dir() {
@@ -132,7 +139,7 @@ impl SoundPackLoader {
             }
         }
 
-        PathBuf::from("assets/sounds")
+        PathBuf::from("src/assets/sounds")
     }
 
     pub fn list_available_packs() -> Vec<(String, String)> {
@@ -186,23 +193,46 @@ impl SoundPackLoader {
 
         if dir_path.is_absolute() && !cfg!(test) {
             let mut allowed = false;
+
+            let env_path_opt = std::env::var("HIBIKI_SOUNDS_DIR").ok();
+
             if let Ok(canon_dir) = dir_path.canonicalize() {
-                for base in ALLOWED_SOUND_BASES {
-                    if let Ok(canon_base) = Path::new(base).canonicalize() {
+                if let Some(env_path) = &env_path_opt {
+                    if let Ok(canon_base) = Path::new(env_path).canonicalize() {
                         if canon_dir.starts_with(canon_base) {
                             allowed = true;
-                            break;
+                        }
+                    }
+                }
+
+                if !allowed {
+                    for base in ALLOWED_SOUND_BASES {
+                        if let Ok(canon_base) = Path::new(base).canonicalize() {
+                            if canon_dir.starts_with(canon_base) {
+                                allowed = true;
+                                break;
+                            }
                         }
                     }
                 }
             } else if dir_path.file_name().and_then(|n| n.to_str()) == Some("default") {
                 if let Some(parent) = dir_path.parent() {
                     if let Ok(canon_parent) = parent.canonicalize() {
-                        for base in ALLOWED_SOUND_BASES {
-                            if let Ok(canon_base) = Path::new(base).canonicalize() {
+                        if let Some(env_path) = &env_path_opt {
+                            if let Ok(canon_base) = Path::new(env_path).canonicalize() {
                                 if canon_parent.starts_with(canon_base) {
                                     allowed = true;
-                                    break;
+                                }
+                            }
+                        }
+
+                        if !allowed {
+                            for base in ALLOWED_SOUND_BASES {
+                                if let Ok(canon_base) = Path::new(base).canonicalize() {
+                                    if canon_parent.starts_with(canon_base) {
+                                        allowed = true;
+                                        break;
+                                    }
                                 }
                             }
                         }
