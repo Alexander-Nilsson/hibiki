@@ -13,10 +13,25 @@ fn generate_overlay_css(config: &Config) -> String {
     let ks_radius_str = format!("{:.1}px", ks_radius_px);
 
     let b_radius_px = config.bubble.corner_radius * 50.0;
-    let b_radius_str = format!(
-        "0px {:.1}px {:.1}px {:.1}px",
-        b_radius_px, b_radius_px, b_radius_px
-    );
+    let b_radius_str = match config.bubble.position {
+        Position::TopLeft => format!(
+            "0px {:.1}px {:.1}px {:.1}px",
+            b_radius_px, b_radius_px, b_radius_px
+        ),
+        Position::TopRight => format!(
+            "{:.1}px 0px {:.1}px {:.1}px",
+            b_radius_px, b_radius_px, b_radius_px
+        ),
+        Position::BottomRight => format!(
+            "{:.1}px {:.1}px 0px {:.1}px",
+            b_radius_px, b_radius_px, b_radius_px
+        ),
+        Position::BottomLeft => format!(
+            "{:.1}px {:.1}px {:.1}px 0px",
+            b_radius_px, b_radius_px, b_radius_px
+        ),
+        _ => format!("{:.1}px", b_radius_px),
+    };
 
     let overlay = format!(
         include_str!("../../style/overlay.css"),
@@ -111,13 +126,12 @@ pub fn create_bubble_window(app: &Application, config: &Config) -> Result<Applic
 
     window.set_keyboard_mode(gtk4_layer_shell::KeyboardMode::None);
 
-    window.set_anchor(Edge::Top, false);
-    window.set_anchor(Edge::Bottom, true);
-    window.set_anchor(Edge::Left, true);
-    window.set_anchor(Edge::Right, false);
+    for (edge, anchor) in config.bubble.position.layer_shell_edges() {
+        window.set_anchor(edge, anchor);
+    }
 
     window.set_margin(Edge::Top, config.margin);
-    window.set_margin(Edge::Bottom, config.margin + 100);
+    window.set_margin(Edge::Bottom, config.margin);
     window.set_margin(Edge::Left, config.margin);
     window.set_margin(Edge::Right, config.margin);
 
