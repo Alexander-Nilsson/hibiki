@@ -302,13 +302,10 @@ fn setup_tray_handling(
     let tray_handle_t = Arc::clone(&tray_handle);
     let config_service_t = config_service.clone();
     if let Some(settings) = gtk4::Settings::default() {
-        settings.connect_notify(
-            Some("gtk-application-prefer-dark-theme"),
-            move |_, _| {
-                let config = config_service_t.get_config();
-                update_tray_icon(&tray_handle_t, &config);
-            },
-        );
+        settings.connect_notify(Some("gtk-application-prefer-dark-theme"), move |_, _| {
+            let config = config_service_t.get_config();
+            update_tray_icon(&tray_handle_t, &config);
+        });
     }
 
     let tray_handle_a = Arc::clone(&tray_handle);
@@ -320,7 +317,10 @@ fn setup_tray_handling(
     });
 }
 
-fn update_tray_icon(tray_handle: &Arc<TrayHandle>, config: &crate::domain::config::KeystrokeConfig) {
+fn update_tray_icon(
+    tray_handle: &Arc<TrayHandle>,
+    config: &crate::domain::config::KeystrokeConfig,
+) {
     let is_dark = match config.keystroke_theme.as_str() {
         "dark" => true,
         "light" => false,

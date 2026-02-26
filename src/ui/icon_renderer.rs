@@ -35,7 +35,7 @@ pub fn render_tray_icon(theme: IconTheme) -> Vec<Icon> {
             let height = pixbuf.height();
             let channels = pixbuf.n_channels();
             let rowstride = pixbuf.rowstride();
-            
+
             let pixels = match pixbuf.pixel_bytes() {
                 Some(p) => p,
                 None => {
@@ -43,7 +43,7 @@ pub fn render_tray_icon(theme: IconTheme) -> Vec<Icon> {
                     return Vec::new();
                 }
             };
-            
+
             let pixel_slice: &[u8] = pixels.as_ref();
 
             // Convert RGBA to ARGB for ksni
