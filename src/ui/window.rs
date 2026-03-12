@@ -166,7 +166,10 @@ mod tests {
             escape_css_string("Font\\With\\Backslashes"),
             "Font\\\\With\\\\Backslashes"
         );
-        assert_eq!(escape_css_string("Font\nWith\nNewline"), "Font With Newline");
+        assert_eq!(
+            escape_css_string("Font\nWith\nNewline"),
+            "Font With Newline"
+        );
         assert_eq!(
             escape_css_string("Injection\"; color: red;"),
             "Injection\\\"; color: red;"

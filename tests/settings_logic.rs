@@ -40,7 +40,7 @@ async fn test_config_service_updates() {
     let content = loop {
         match fs::read_to_string(&config_path) {
             Ok(c) => break c,
-            Err(e) if attempts < 5 => {
+            Err(_e) if attempts < 5 => {
                 attempts += 1;
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 continue;

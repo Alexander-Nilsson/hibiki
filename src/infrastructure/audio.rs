@@ -6,6 +6,7 @@ use std::fs;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
+use std::result::Result::Ok;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,28 +29,18 @@ impl AudioBuffer {
     }
 
     pub fn to_source_slice(&self, start_ms: u64, duration_ms: u64) -> AudioBufferSource {
-        let start_frame = (start_ms * self.sample_rate as u64) / 1000;
-        let duration_frames = (duration_ms * self.sample_rate as u64) / 1000;
-
-        let start_sample = (start_frame * self.channels as u64) as usize;
-        let mut end_sample = start_sample + (duration_frames * self.channels as u64) as usize;
-
-        if end_sample > self.samples.len() {
-            end_sample = self.samples.len();
-        }
-
-        let pos = if start_sample < self.samples.len() {
-            start_sample
-        } else {
-            self.samples.len()
-        };
+        let start_pos =
+            (start_ms * self.sample_rate as u64 / 1000) as usize * self.channels as usize;
+        let duration_pos =
+            (duration_ms * self.sample_rate as u64 / 1000) as usize * self.channels as usize;
+        let end_pos = (start_pos + duration_pos).min(self.samples.len());
 
         AudioBufferSource {
             buffer: self.samples.clone(),
-            pos,
+            pos: start_pos,
             sample_rate: self.sample_rate,
             channels: self.channels,
-            end_pos: end_sample,
+            end_pos,
         }
     }
 }
@@ -64,11 +55,12 @@ pub struct AudioBufferSource {
 
 impl Iterator for AudioBufferSource {
     type Item = f32;
+
     fn next(&mut self) -> Option<Self::Item> {
         if self.pos < self.end_pos {
-            let sample = self.buffer[self.pos];
+            let res = self.buffer[self.pos] as f32 / 32767.0;
             self.pos += 1;
-            Some(sample as f32 / 32767.0)
+            Some(res)
         } else {
             None
         }
@@ -77,7 +69,7 @@ impl Iterator for AudioBufferSource {
 
 impl Source for AudioBufferSource {
     fn current_span_len(&self) -> Option<usize> {
-        Some((self.end_pos - self.pos) / self.channels as usize)
+        None
     }
 
     fn channels(&self) -> u16 {
@@ -89,9 +81,8 @@ impl Source for AudioBufferSource {
     }
 
     fn total_duration(&self) -> Option<Duration> {
-        let n_frames = (self.end_pos - self.pos) as u64 / self.channels as u64;
-        Some(Duration::from_micros(
-            n_frames * 1_000_000 / self.sample_rate as u64,
+        Some(Duration::from_secs_f64(
+            (self.end_pos - self.pos) as f64 / self.sample_rate as f64 / self.channels as f64,
         ))
     }
 }
@@ -121,7 +112,25 @@ impl SoundPackLoader {
         {
             anyhow::bail!("Forbidden path component: {}", sub);
         }
-        Ok(base.join(sub_path))
+
+        let joined = base.join(sub_path);
+
+        if !joined.exists() {
+            return Ok(joined);
+        }
+
+        let canon_joined = joined
+            .canonicalize()
+            .with_context(|| format!("Failed to canonicalize path: {:?}", joined))?;
+        let canon_base = base
+            .canonicalize()
+            .with_context(|| format!("Failed to canonicalize base path: {:?}", base))?;
+
+        if !canon_joined.starts_with(canon_base) {
+            anyhow::bail!("Path traversal detected via symlink: {}", sub);
+        }
+
+        Ok(canon_joined)
     }
 
     pub fn get_sound_pack_dir() -> PathBuf {
@@ -132,14 +141,14 @@ impl SoundPackLoader {
             }
         }
 
-        for path_str in ALLOWED_SOUND_BASES {
-            let path = Path::new(path_str);
+        for base in ALLOWED_SOUND_BASES {
+            let path = PathBuf::from(base);
             if path.exists() && path.is_dir() {
-                return path.to_path_buf();
+                return path;
             }
         }
 
-        PathBuf::from("src/assets/sounds")
+        PathBuf::from("assets/sounds")
     }
 
     pub fn list_available_packs() -> Vec<(String, String)> {
@@ -160,7 +169,7 @@ impl SoundPackLoader {
                                     json.get("name")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string())
-                                        .unwrap_or_else(|| dir_name.clone())
+                                        .unwrap_or(dir_name.clone())
                                 } else {
                                     dir_name.clone()
                                 }
@@ -173,145 +182,68 @@ impl SoundPackLoader {
                 }
             }
         }
-
         packs.sort_by(|a, b| a.1.cmp(&b.1));
-        if packs.is_empty() {
-            packs.push(("default".to_string(), "Default".to_string()));
-        }
         packs
     }
 
-    pub fn load_from_directory(dir_path: impl AsRef<Path>) -> Result<LoadedSoundPack> {
-        let dir_path = dir_path.as_ref();
+    pub fn load_from_directory(path: &Path) -> Result<LoadedSoundPack> {
+        let path = path
+            .canonicalize()
+            .with_context(|| format!("Failed to canonicalize pack path: {:?}", path))?;
 
-        if dir_path
-            .components()
-            .any(|c| matches!(c, std::path::Component::ParentDir))
-        {
-            anyhow::bail!("Path traversal detected in sound pack path: {:?}", dir_path);
-        }
+        let config_path = path.join("config.json");
+        let config_file = File::open(&config_path)
+            .with_context(|| format!("Failed to open config.json at {:?}", config_path))?;
+        let reader = BufReader::new(config_file);
+        let config: MechvibesConfig = serde_json::from_reader(reader)
+            .with_context(|| format!("Failed to parse config.json at {:?}", config_path))?;
 
-        if dir_path.is_absolute() && !cfg!(test) {
-            let mut allowed = false;
-
-            let env_path_opt = std::env::var("HIBIKI_SOUNDS_DIR").ok();
-
-            if let Ok(canon_dir) = dir_path.canonicalize() {
-                if let Some(env_path) = &env_path_opt {
-                    if let Ok(canon_base) = Path::new(env_path).canonicalize() {
-                        if canon_dir.starts_with(canon_base) {
-                            allowed = true;
-                        }
-                    }
-                }
-
-                if !allowed {
-                    for base in ALLOWED_SOUND_BASES {
-                        if let Ok(canon_base) = Path::new(base).canonicalize() {
-                            if canon_dir.starts_with(canon_base) {
-                                allowed = true;
-                                break;
-                            }
-                        }
-                    }
-                }
-            } else if dir_path.file_name().and_then(|n| n.to_str()) == Some("default") {
-                if let Some(parent) = dir_path.parent() {
-                    if let Ok(canon_parent) = parent.canonicalize() {
-                        if let Some(env_path) = &env_path_opt {
-                            if let Ok(canon_base) = Path::new(env_path).canonicalize() {
-                                if canon_parent.starts_with(canon_base) {
-                                    allowed = true;
-                                }
-                            }
-                        }
-
-                        if !allowed {
-                            for base in ALLOWED_SOUND_BASES {
-                                if let Ok(canon_base) = Path::new(base).canonicalize() {
-                                    if canon_parent.starts_with(canon_base) {
-                                        allowed = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if !allowed {
-                anyhow::bail!("Access to absolute path is restricted: {:?}", dir_path);
-            }
-        }
-
-        let effective_path = if dir_path.file_name().and_then(|n| n.to_str()) == Some("default")
-            && !dir_path.exists()
-        {
-            let base = dir_path.parent().unwrap_or_else(|| Path::new("."));
-            let fallback = base.join("cherrymx-blue-abs");
-            if fallback.exists() {
-                tracing::info!("Mapping 'default' sound pack to 'cherrymx-blue-abs'");
-                fallback
-            } else {
-                dir_path.to_path_buf()
-            }
-        } else {
-            dir_path.to_path_buf()
-        };
-
-        let config_path = effective_path.join("config.json");
-
-        let file = File::open(&config_path)
-            .with_context(|| format!("Failed to open config file at {:?}", config_path))?;
-        let reader = BufReader::new(file);
-
-        let mut config: MechvibesConfig = serde_json::from_reader(reader)
-            .with_context(|| "Failed to parse Mechvibes config.json")?;
-
-        config.path = effective_path;
-
-        Self::load(config)
-    }
-
-    pub fn load(config: MechvibesConfig) -> Result<LoadedSoundPack> {
         let mut buffers = HashMap::new();
-        let base_path = &config.path;
 
         match config.key_define_type {
             KeyDefineType::Single => {
-                let path = Self::safe_join(base_path, &config.sound)?;
-                if path.exists() {
-                    match Self::load_file(&path) {
-                        Ok(buffer) => {
-                            buffers.insert("main".to_string(), buffer);
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to load single sound file {:?}: {}", path, e)
-                        }
-                    }
-                } else {
-                    tracing::warn!("Sound file missing for single pack: {:?}", path);
-                }
+                let full_path = Self::safe_join(&path, &config.sound)?;
+                let file = File::open(&full_path)
+                    .with_context(|| format!("Failed to open sound file: {:?}", full_path))?;
+                let reader = BufReader::new(file);
+                let decoder = Decoder::new(reader)
+                    .with_context(|| format!("Failed to decode sound: {:?}", full_path))?;
+
+                let sample_rate = decoder.sample_rate();
+                let channels = decoder.channels();
+                let samples: Vec<i16> = decoder.map(|s| (s * 32767.0) as i16).collect();
+
+                buffers.insert(
+                    "main".to_string(),
+                    AudioBuffer {
+                        samples: Arc::from(samples),
+                        sample_rate,
+                        channels,
+                    },
+                );
             }
             KeyDefineType::Multi => {
                 for define in config.defines.values() {
-                    if let KeyDefine::Multi(Some(filename)) = define {
-                        if !buffers.contains_key(filename) {
-                            let path = Self::safe_join(base_path, filename)?;
-                            if path.exists() {
-                                match Self::load_file(&path) {
-                                    Ok(buffer) => {
-                                        buffers.insert(filename.clone(), buffer);
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "Failed to load sound file {:?}: {}",
-                                            path,
-                                            e
-                                        );
-                                    }
-                                }
+                    if let KeyDefine::Multi(Some(rel_path)) = define {
+                        let full_path = Self::safe_join(&path, rel_path)?;
+                        if full_path.exists() {
+                            let file = File::open(&full_path).with_context(|| {
+                                format!("Failed to open sound file: {:?}", full_path)
+                            })?;
+                            let reader = BufReader::new(file);
+                            if let Ok(decoder) = Decoder::new(reader) {
+                                let sample_rate = decoder.sample_rate();
+                                let channels = decoder.channels();
+                                let samples: Vec<i16> =
+                                    decoder.map(|s| (s * 32767.0) as i16).collect();
+                                buffers.insert(
+                                    rel_path.clone(),
+                                    AudioBuffer {
+                                        samples: Arc::from(samples),
+                                        sample_rate,
+                                        channels,
+                                    },
+                                );
                             }
                         }
                     }
@@ -320,25 +252,5 @@ impl SoundPackLoader {
         }
 
         Ok(LoadedSoundPack { config, buffers })
-    }
-
-    fn load_file(path: &Path) -> Result<AudioBuffer> {
-        let file =
-            File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
-        let source = Decoder::new(BufReader::new(file))
-            .map_err(|e| anyhow::anyhow!("Failed to decode audio: {}", e))?;
-
-        let sample_rate = source.sample_rate();
-        let channels = source.channels();
-
-        let samples: Vec<i16> = source
-            .map(|s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
-            .collect();
-
-        Ok(AudioBuffer {
-            samples: samples.into(),
-            sample_rate,
-            channels,
-        })
     }
 }
