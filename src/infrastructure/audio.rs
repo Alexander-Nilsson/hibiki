@@ -169,7 +169,7 @@ impl SoundPackLoader {
                                     json.get("name")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string())
-                                        .unwrap_or(dir_name.clone())
+                                        .unwrap_or_else(|| dir_name.clone())
                                 } else {
                                     dir_name.clone()
                                 }
@@ -187,6 +187,13 @@ impl SoundPackLoader {
     }
 
     pub fn load_from_directory(path: &Path) -> Result<LoadedSoundPack> {
+        if path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            anyhow::bail!("Path traversal detected: {:?}", path);
+        }
+
         let path = path
             .canonicalize()
             .with_context(|| format!("Failed to canonicalize pack path: {:?}", path))?;

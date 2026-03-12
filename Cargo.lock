@@ -1156,6 +1156,7 @@ dependencies = [
  "nix 0.29.0",
  "once_cell",
  "parking_lot",
+ "rayon",
  "rodio",
  "serde",
  "serde_json",
