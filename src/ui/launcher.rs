@@ -322,8 +322,3 @@ pub fn show_launcher(window: &ApplicationWindow) {
     window.set_visible(true);
     window.present();
 }
-
-#[allow(dead_code)]
-pub fn hide_launcher(window: &ApplicationWindow) {
-    window.set_visible(false);
-}
