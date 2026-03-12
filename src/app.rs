@@ -19,10 +19,11 @@ use async_channel::{bounded, Receiver};
 use gtk4::glib::{self, ControlFlow};
 use gtk4::prelude::*;
 use gtk4::{Application, ApplicationWindow, CssProvider};
+use parking_lot::Mutex;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, error, info, warn};
 
@@ -82,7 +83,7 @@ impl App {
         let audio_engine_container = self.audio_engine.clone();
 
         self.gtk_app.connect_activate(move |app| {
-            let audio_engine = audio_engine_container.lock().unwrap().take();
+            let audio_engine = audio_engine_container.lock().take();
             activate(
                 app,
                 &config_service,
@@ -105,7 +106,7 @@ impl App {
         let audio_engine_container = self.audio_engine.clone();
 
         self.gtk_app.connect_activate(move |app| {
-            let audio_engine = audio_engine_container.lock().unwrap().take();
+            let audio_engine = audio_engine_container.lock().take();
             activate_without_tray(app, &config_service, audio_dispatcher.clone(), audio_engine);
         });
 

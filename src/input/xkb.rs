@@ -166,10 +166,7 @@ impl XkbState {
     pub fn from_layout_name(name: Option<&str>) -> Option<Self> {
         let context = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
 
-        let (layout, variant) = match name {
-            Some(n) => parse_layout_name(n),
-            None => ("", ""),
-        };
+        let (layout, variant) = name.map_or(("", ""), parse_layout_name);
 
         let layout_name = name.unwrap_or("default").to_string();
 
