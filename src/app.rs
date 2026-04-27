@@ -30,6 +30,7 @@ use tracing::{debug, error, info, warn};
 pub struct App {
     gtk_app: Application,
     config_service: ConfigService,
+    no_ui: bool,
     #[allow(dead_code)]
     audio_engine: Arc<Mutex<Option<AudioEngine>>>,
     audio_dispatcher: Option<AudioDispatcher>,
@@ -55,7 +56,7 @@ struct RuntimeState {
 
 impl App {
     #[must_use]
-    pub fn new(config_service: ConfigService) -> Self {
+    pub fn new(config_service: ConfigService, no_ui: bool) -> Self {
         let gtk_app = Application::builder()
             .application_id("dev.linuxmobile.hibiki")
             .build();
@@ -71,6 +72,7 @@ impl App {
         Self {
             gtk_app,
             config_service,
+            no_ui,
             audio_engine: Arc::new(Mutex::new(audio_engine)),
             audio_dispatcher,
         }
@@ -81,6 +83,7 @@ impl App {
         let config_service = self.config_service.clone();
         let audio_dispatcher = self.audio_dispatcher.clone();
         let audio_engine_container = self.audio_engine.clone();
+        let no_ui = self.no_ui;
 
         self.gtk_app.connect_activate(move |app| {
             let audio_engine = audio_engine_container.lock().take();
@@ -91,6 +94,7 @@ impl App {
                 tray_handle.clone(),
                 audio_dispatcher.clone(),
                 audio_engine,
+                no_ui,
             );
         });
 
@@ -104,10 +108,11 @@ impl App {
         let config_service = self.config_service.clone();
         let audio_dispatcher = self.audio_dispatcher.clone();
         let audio_engine_container = self.audio_engine.clone();
+        let no_ui = self.no_ui;
 
         self.gtk_app.connect_activate(move |app| {
             let audio_engine = audio_engine_container.lock().take();
-            activate_without_tray(app, &config_service, audio_dispatcher.clone(), audio_engine);
+            activate_without_tray(app, &config_service, audio_dispatcher.clone(), audio_engine, no_ui);
         });
 
         let exit_code = self.gtk_app.run_with_args::<&str>(&[]);
@@ -122,6 +127,7 @@ fn activate_without_tray(
     config_service: &ConfigService,
     audio_dispatcher: Option<AudioDispatcher>,
     audio_engine: Option<AudioEngine>,
+    no_ui: bool,
 ) {
     info!("Activating keystroke application (no tray)");
 
@@ -146,7 +152,7 @@ fn activate_without_tray(
     crate::ui::update_css_provider(&css_provider, &config);
     state.borrow_mut().css_provider = Some(css_provider);
 
-    setup_launcher_and_modes(app, &state, config_service.clone());
+    setup_launcher_and_modes(app, &state, config_service.clone(), no_ui);
 }
 
 fn activate(
@@ -156,6 +162,7 @@ fn activate(
     tray_handle: TrayHandle,
     audio_dispatcher: Option<AudioDispatcher>,
     audio_engine: Option<AudioEngine>,
+    no_ui: bool,
 ) {
     info!("Activating keystroke application");
 
@@ -180,7 +187,7 @@ fn activate(
     crate::ui::update_css_provider(&css_provider, &config);
     state.borrow_mut().css_provider = Some(css_provider);
 
-    setup_launcher_and_modes(app, &state, config_service.clone());
+    setup_launcher_and_modes(app, &state, config_service.clone(), no_ui);
 
     setup_tray_handling(
         Rc::clone(&state),
@@ -195,6 +202,7 @@ fn setup_launcher_and_modes(
     app: &Application,
     state: &Rc<RefCell<RuntimeState>>,
     config_service: ConfigService,
+    no_ui: bool,
 ) {
     let app_for_mode = app.clone();
     let state_for_mode = Rc::clone(state);
@@ -222,7 +230,14 @@ fn setup_launcher_and_modes(
 
     state.borrow_mut().launcher_window = Some(launcher.clone());
 
-    show_launcher(&launcher);
+    if no_ui {
+        // Skip the Dashboard. Use display_mode from config to pick which
+        // visualizer to start, defaulting to Keystroke if unset.
+        let mode = config_service.get_config().display_mode;
+        switch_mode(app, state, &config_service, mode);
+    } else {
+        show_launcher(&launcher);
+    }
 }
 
 fn switch_mode(
