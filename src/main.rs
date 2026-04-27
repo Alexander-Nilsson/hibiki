@@ -8,7 +8,15 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 fn main() -> Result<()> {
     init_logging();
 
+    // Parse --no-ui / -n before GTK sees the args.
+    // GTK's own arg parser will error on unknown flags, so we strip ours out
+    // by passing an empty arg list to GTK later (run_with_args::<&str>(&[])).
+    let no_ui = std::env::args().any(|a| a == "--no-ui" || a == "-n");
+
     info!("Starting Hibiki v{}", env!("CARGO_PKG_VERSION"));
+    if no_ui {
+        info!("--no-ui flag set: skipping Dashboard window");
+    }
 
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -37,15 +45,13 @@ fn main() -> Result<()> {
     match tray::start_tray() {
         Ok((tray_rx, tray_handle)) => {
             info!("System tray started successfully");
-
-            let app = app::App::new(config_service);
+            let app = app::App::new(config_service, no_ui);
             let exit_code = app.run_with_tray(tray_rx, tray_handle);
             std::process::exit(exit_code);
         }
         Err(e) => {
             warn!("Failed to start system tray: {}, running without tray", e);
-
-            let app = app::App::new(config_service);
+            let app = app::App::new(config_service, no_ui);
             let exit_code = app.run();
             std::process::exit(exit_code);
         }
