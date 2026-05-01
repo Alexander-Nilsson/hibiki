@@ -1142,6 +1142,24 @@ fn setup_hotkey_capture(
 
     controller.connect_key_pressed(move |_, keyval, _keycode, state| {
         if *listening_c.borrow() {
+            // Allow Backspace to clear the hotkey
+            if keyval == gtk4::gdk::Key::BackSpace {
+                let mut cfg = service_c.get_config();
+                match hotkey_type {
+                    HotkeyType::KeystrokeActivation => cfg.keystroke_hotkey = String::new(),
+                    HotkeyType::BubbleActivation => cfg.bubble.hotkey = String::new(),
+                    HotkeyType::Pause => cfg.pause_hotkey = String::new(),
+                    HotkeyType::ToggleFocus => cfg.toggle_focus_hotkey = String::new(),
+                }
+
+                let _ = service_c.update_config(cfg);
+
+                btn_c.set_label(&format_hotkey(""));
+                btn_c.remove_css_class("suggested-action");
+                *listening_c.borrow_mut() = false;
+                return glib::Propagation::Stop;
+            }
+
             if is_modifier(keyval) {
                 let accelerator = gtk4::accelerator_name(keyval, state);
                 btn_c.set_label(&format_hotkey(&accelerator));

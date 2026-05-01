@@ -99,6 +99,11 @@ impl RoutingEngine {
             return RoutingResult::Ignored;
         }
 
+        // ESC always exits Bubble mode to Keystroke mode
+        if current_mode == DisplayMode::Bubble && key == Key::KEY_ESC && pressed {
+            return RoutingResult::SwitchMode(DisplayMode::Keystroke);
+        }
+
         RoutingResult::Dispatch(key, pressed)
     }
 
@@ -266,6 +271,23 @@ mod tests {
 
         let result = engine.process(Key::KEY_A, true, true, DisplayMode::Keystroke);
         assert_eq!(result, RoutingResult::Dispatch(Key::KEY_A, true));
+    }
+
+    #[test]
+    fn test_bubble_mode_exit_with_esc() {
+        let mut engine = setup_engine();
+
+        // Press ESC in Bubble mode
+        let result = engine.process(Key::KEY_ESC, true, true, DisplayMode::Bubble);
+        assert_eq!(result, RoutingResult::SwitchMode(DisplayMode::Keystroke));
+
+        // Released ESC should just be dispatched (though usually the mode would have switched)
+        let result = engine.process(Key::KEY_ESC, false, true, DisplayMode::Bubble);
+        assert_eq!(result, RoutingResult::Dispatch(Key::KEY_ESC, false));
+
+        // Press ESC in Keystroke mode should just be dispatched
+        let result = engine.process(Key::KEY_ESC, true, true, DisplayMode::Keystroke);
+        assert_eq!(result, RoutingResult::Dispatch(Key::KEY_ESC, true));
     }
 
     #[test]

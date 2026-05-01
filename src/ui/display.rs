@@ -13,6 +13,8 @@ const LOGO_SVG: &[u8] = include_bytes!("../assets/logo-symbolic.svg");
 struct DisplayedKey {
     keys: Vec<Key>,
 
+    trigger_key: Key,
+
     last_active: Instant,
 
     is_held: bool,
@@ -121,15 +123,20 @@ impl KeyDisplayWidget {
         }
 
         let current_combo = self.get_current_combo(key.key);
-        if let Some(existing) = self
-            .displayed_keys
-            .iter_mut()
-            .find(|dk| dk.keys == current_combo)
-        {
-            existing.last_active = Instant::now();
-            existing.is_held = true;
-            existing.widget.remove_css_class("fading");
-            return;
+
+        // If it's a repeat event, try to update the existing entry
+        if key.is_repeat {
+            if let Some(existing) = self
+                .displayed_keys
+                .iter_mut()
+                .rev()
+                .find(|dk| dk.keys == current_combo)
+            {
+                existing.last_active = Instant::now();
+                existing.is_held = true;
+                existing.widget.remove_css_class("fading");
+                return;
+            }
         }
 
         self.remove_expired();
@@ -145,6 +152,7 @@ impl KeyDisplayWidget {
         self.container.append(&widget);
 
         let displayed = DisplayedKey {
+            trigger_key: key.key,
             keys: current_combo,
             last_active: Instant::now(),
             is_held: true,
@@ -228,12 +236,15 @@ impl KeyDisplayWidget {
             self.held_modifiers.remove(&key.key);
         }
 
-        for displayed in self.displayed_keys.iter_mut() {
-            if displayed.keys.contains(&key.key) {
-                displayed.is_held = false;
-                displayed.last_active = Instant::now();
-                displayed.widget.add_css_class("fading");
-            }
+        // Find the oldest entry that is still marked as held and was triggered by this key
+        if let Some(displayed) = self
+            .displayed_keys
+            .iter_mut()
+            .find(|dk| dk.trigger_key == key.key && dk.is_held)
+        {
+            displayed.is_held = false;
+            displayed.last_active = Instant::now();
+            displayed.widget.add_css_class("fading");
         }
     }
 
@@ -286,5 +297,52 @@ impl KeyDisplayWidget {
     #[allow(dead_code)]
     pub fn has_keys(&self) -> bool {
         !self.displayed_keys.is_empty()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evdev::Key;
+
+    #[test]
+    fn test_add_repeated_keys() {
+        // We need a GTK context for this, but KeyDisplayWidget::new calls GTK functions.
+        // In a headless environment this might fail if not initialized.
+        // However, many Rust GTK projects use gtk4::init().
+        if gtk4::init().is_err() {
+            return; // Skip if GTK cannot be initialized
+        }
+
+        let mut widget = KeyDisplayWidget::new(5, 1000);
+        
+        // Add 'A' twice as new presses
+        widget.add_key(KeyDisplay::new(Key::KEY_A, true));
+        widget.add_key(KeyDisplay::new(Key::KEY_A, true));
+        
+        assert_eq!(widget.displayed_keys.len(), 2);
+        assert_eq!(widget.displayed_keys[0].keys, vec![Key::KEY_A]);
+        assert_eq!(widget.displayed_keys[1].keys, vec![Key::KEY_A]);
+        
+        // Add 'A' as a repeat event
+        let mut repeat_a = KeyDisplay::new(Key::KEY_A, true);
+        repeat_a.is_repeat = true;
+        widget.add_key(repeat_a);
+        
+        // Should still be 2 entries, but the last one should be updated
+        assert_eq!(widget.displayed_keys.len(), 2);
+        assert!(widget.displayed_keys[1].is_held);
+
+        // Release 'A'
+        widget.remove_key(&KeyDisplay::new(Key::KEY_A, false));
+
+        // The FIRST 'A' should now be fading (is_held = false)
+        assert!(!widget.displayed_keys[0].is_held);
+        // The SECOND 'A' should STILL be held (because we only released once)
+        assert!(widget.displayed_keys[1].is_held);
+
+        // Release 'A' again
+        widget.remove_key(&KeyDisplay::new(Key::KEY_A, false));
+        assert!(!widget.displayed_keys[1].is_held);
     }
 }
